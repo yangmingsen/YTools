@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -21,6 +22,11 @@ const (
 	KB = 2
 	MB = 3
 	GB = 4
+)
+
+const (
+	MultiRemotePort  = "8849"
+	SingleRemotePort = "8848"
 )
 
 var debug bool
@@ -149,5 +155,27 @@ func GetLocalIpv4List() []string {
 		}
 	}
 	//fmt.Println(res)
+	return res
+}
+
+//解析ipv4为数组格式
+func ParseUdpFormat(ip string) []byte {
+	res := make([]byte, 4)
+	//splitStr := strings.Split(ip,":")
+	//ipStr := splitStr[0]
+	//port  := splitStr[1]
+	//intPort, _ := strconv.Atoi(port)
+
+	p := strings.Split(ip, ".")
+	a, _ := strconv.Atoi(p[0])
+	b, _ := strconv.Atoi(p[1])
+	c, _ := strconv.Atoi(p[2])
+	d, _ := strconv.Atoi(p[3])
+
+	res[0] = byte(a)
+	res[1] = byte(b)
+	res[2] = byte(c)
+	res[3] = byte(d)
+
 	return res
 }

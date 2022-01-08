@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -20,9 +21,11 @@ import (
 var remoteIp string
 
 //远程端口
-var remotePort string
+var multiRemotePort string
 
-//并发数
+var singleRemotePort string
+
+//并发数(用于多文件传输时，默认并发数为cpu的核数
 var goroutineNum int
 
 //总文件数
@@ -53,8 +56,10 @@ var wg sync.WaitGroup
 
 //初始化
 func init() {
-	remotePort = "9949"
-	goroutineNum = 1
+	multiRemotePort = ycomm.MultiRemotePort
+	singleRemotePort = ycomm.SingleRemotePort
+	//cpu的核数
+	goroutineNum = runtime.NumCPU()
 	totalFileNum = 0
 	finishFileNum = 0
 }
@@ -238,7 +243,7 @@ func syncDir(dirList []ycomm.CFileInfo) {
 	}
 
 	//向服务器发起请求
-	connectIP := (remoteIp + ":" + remotePort)
+	connectIP := (remoteIp + ":" + multiRemotePort)
 	conn, err1 := net.Dial("tcp", connectIP)
 	if err1 != nil {
 		fmt.Println("远程服务连接【", connectIP, "】失败")
@@ -328,7 +333,7 @@ func syncFile(fileList []ycomm.CFileInfo) {
 			defer wg.Done()
 
 			//向服务器发起请求
-			connectIP := (remoteIp + ":" + remotePort)
+			connectIP := (remoteIp + ":" + multiRemotePort)
 			conn, err1 := net.Dial("tcp", connectIP)
 			if err1 != nil {
 				fmt.Println("远程服务[", connectIP, "]连接失败")
@@ -460,6 +465,10 @@ func doSendMutliFile(path string) {
 
 }
 
+//准备实现3种方案
+//1. 手动直连方式：ysend [-r] ./文件或文件夹 目标ip [go Number]
+//2. 自动直连方式：ysend [-c] ./文件或文件夹 目标ip [go Number]
+//3.
 func main() {
 	args := os.Args
 	argLen := len(args)

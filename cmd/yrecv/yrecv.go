@@ -155,28 +155,6 @@ func getLocalIpv4() string {
 	return split[0]
 }
 
-//解析ipv4为数组格式
-func parseUdpFormat(ip string) []byte {
-	res := make([]byte, 4)
-	//splitStr := strings.Split(ip,":")
-	//ipStr := splitStr[0]
-	//port  := splitStr[1]
-	//intPort, _ := strconv.Atoi(port)
-
-	p := strings.Split(ip, ".")
-	a, _ := strconv.Atoi(p[0])
-	b, _ := strconv.Atoi(p[1])
-	c, _ := strconv.Atoi(p[2])
-	d, _ := strconv.Atoi(p[3])
-
-	res[0] = byte(a)
-	res[1] = byte(b)
-	res[2] = byte(c)
-	res[3] = byte(d)
-
-	return res
-}
-
 //udp fun
 func listenUDP(ip string) {
 
@@ -191,7 +169,7 @@ func listenUDP(ip string) {
 			ipStr = splitStr[0]
 		}
 
-		nr = parseUdpFormat(ipStr)
+		nr = ycomm.ParseUdpFormat(ipStr)
 
 		listen, err0 = net.ListenUDP("udp", &net.UDPAddr{
 			IP:   net.IPv4(nr[0], nr[1], nr[2], nr[3]),
@@ -212,7 +190,7 @@ func listenUDP(ip string) {
 
 		ok := false
 		for _, theIp := range listenIp {
-			nr = parseUdpFormat(theIp)
+			nr = ycomm.ParseUdpFormat(theIp)
 
 			listen, err0 = net.ListenUDP("udp", &net.UDPAddr{
 				IP:   net.IPv4(nr[0], nr[1], nr[2], nr[3]),
@@ -253,7 +231,7 @@ func listenUDP(ip string) {
 		reallyRemoteIP := string(data[:n])
 		//recvIpStr := addr.String()
 		//sprArr := strings.Split(recvIpStr, ":")
-		nr2 := parseUdpFormat(reallyRemoteIP)
+		nr2 := ycomm.ParseUdpFormat(reallyRemoteIP)
 
 		socket, err1 := net.DialUDP("udp", nil, &net.UDPAddr{
 			IP:   net.IPv4(nr2[0], nr2[1], nr2[2], nr2[3]),
@@ -627,6 +605,7 @@ func doAutoBindServer() {
 	doMultiFileTranServer()
 }
 
+//根据指定ip建立8848,8849,8850服务
 func doSpecificBindServer(ip string) {
 	singleServer := doBindServer(ip, singleFilePort)
 	if singleServer != nil {
