@@ -1,7 +1,9 @@
 package main
 
 import (
-	"YTools/ycomm"
+	ycomm "YTools/ycomm"
+	"YTools/ylog"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -14,15 +16,13 @@ import (
 	"time"
 )
 
-//单文件远程端口 8848
-//多文件远程端口 9949
-
 //远程ip
 var remoteIp string
 
-//远程端口
+//多文件远程端口 9949
 var multiRemotePort string
 
+//单文件远程端口 8848
 var singleRemotePort string
 
 //并发数(用于多文件传输时，默认并发数为cpu的核数
@@ -465,11 +465,75 @@ func doSendMutliFile(path string) {
 
 }
 
-//准备实现3种方案
-//1. 手动直连方式：ysend [-r] ./文件或文件夹 目标ip [go Number]
-//2. 自动直连方式：ysend [-c] ./文件或文件夹 目标ip [go Number]
-//3.
+var flags struct {
+	RouteIP        string
+	RemoteIP       string
+	RemoteName     string
+	SingleFilePath string
+	MultiFilePath  string
+	goNumber       int
+}
+
+func getUsage() {
+	flag.Usage()
+	fmt.Println("例如: ysend -f 文件 -d 目标Ip")
+	fmt.Println("例如: ysend -r 文件夹 -d 目标Ip  -sn 并发数")
+	fmt.Println("例如: ysend -c 10.55.3.4 -dn yms -f 文件")
+	fmt.Println("例如: ysend -c 10.55.3.4 -dn yms -r 文件夹 -sn 并发数")
+}
+
 func main() {
+
+	flag.StringVar(&flags.RouteIP, "c", "", "路由ip")
+	flag.StringVar(&flags.MultiFilePath, "r", "", "./文件夹")
+	flag.StringVar(&flags.SingleFilePath, "f", "", "./文件")
+	flag.StringVar(&flags.RemoteIP, "d", "", "目标ip")
+	flag.StringVar(&flags.RemoteName, "dn", "", "dn[dest Name]远程目标名字")
+	flag.IntVar(&flags.goNumber, "sn", runtime.NumCPU()*2, "并发数[默认cpu*2]")
+	flag.BoolVar(&ycomm.Debug, "debug", false, "debug mode")
+	flag.Parse()
+
+	ylog.Logf("输入参数==>", flags)
+
+	//直连与自动直连方式选择
+	if flags.RouteIP != "" { //自动直连方式
+		ylog.Logf("自动直连选择=======>")
+
+	} else if flags.RemoteIP != "" { //直连方式
+		ylog.Logf("直连选择=======>")
+		//发送单文件还是多文件
+		if flags.MultiFilePath != "" {
+			//如果是多文件
+			sendPath := flags.MultiFilePath
+			remoteIp = flags.RemoteIP
+			goroutineNum = flags.goNumber
+
+			ylog.Logf("目标ip==>", remoteIp, "===>发送文件===>", sendPath, "===>goNumber===>", goroutineNum)
+
+			//do send
+			doSendMutliFile(sendPath)
+		} else if flags.SingleFilePath != "" {
+			//单文件
+			filePath := flags.SingleFilePath
+			targetIp := flags.RemoteIP + ":" + singleRemotePort
+
+			ylog.Logf("目标ip==>", targetIp, "===>发送文件", filePath)
+
+			//do parse
+			parseSingleFileInfo(filePath, targetIp)
+
+		} else {
+			getUsage()
+		}
+
+	} else {
+		getUsage()
+	}
+	wg.Wait()
+
+}
+
+func main1() {
 	args := os.Args
 	argLen := len(args)
 

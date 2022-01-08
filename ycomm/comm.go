@@ -25,11 +25,11 @@ const (
 )
 
 const (
-	MultiRemotePort  = "8849"
-	SingleRemotePort = "8848"
+	MultiRemotePort  = "9949"
+	SingleRemotePort = "8848" //单文件端口
 )
 
-var debug bool
+var Debug bool
 
 //多文件变量
 //======================================================================

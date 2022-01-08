@@ -5,7 +5,9 @@
 1. 手动直连方式：ysend [-r] ./文件或文件夹 目标ip [go Number]
    1. [-r] 为多文件发送参数,省略为单文件
    2. [go Number] 并发数
-2. 自动直连方式：ysend [-c] ./文件或文件夹 目标ip [go Number]
+
+2. 自动直连方式：
+   1. ysend -c routeIp  [-r]./文件或文件夹 目标ip [go Number]
 
 
 ### ydect 目标探测工具

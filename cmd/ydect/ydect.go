@@ -1,7 +1,7 @@
 package main
 
 import (
-	"YTools/ycomm"
+	ycomm "YTools/ycomm"
 	"fmt"
 	"net"
 	"os"
