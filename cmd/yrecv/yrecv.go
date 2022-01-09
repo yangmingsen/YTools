@@ -2,10 +2,14 @@ package main
 
 import (
 	ycomm "YTools/ycomm"
+	"YTools/ylog"
+	"YTools/ynet"
+	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -321,16 +325,6 @@ func handleRecvFile(listener net.Listener) {
 //多文件函数
 //***********************************************************************
 
-func doBindServer(ip string, port string) (bindIp net.Listener) {
-	bindIp, err0 := net.Listen("tcp", ip+":"+port)
-	if err0 == nil {
-		return bindIp
-	} else {
-		fmt.Println("ip: ", ip, " Can't bind, [", err0, "]")
-		return nil
-	}
-}
-
 func doCreateServer(port string) net.Listener {
 	listenIp := ycomm.GetLocalIpv4List()
 	ipLen := len(listenIp)
@@ -340,7 +334,7 @@ func doCreateServer(port string) net.Listener {
 	}
 
 	for _, theIp := range listenIp {
-		bindServer := doBindServer(theIp, port)
+		bindServer := ynet.GetBindNet(theIp, port)
 		if bindServer != nil {
 			return bindServer
 		}
@@ -581,6 +575,7 @@ func doMultiFileTranServer() {
 //含单文件传输服务和多文件传输服务
 //
 func doAutoBindServer() {
+	ylog.Logf("自动绑定模式===>开始创建单文件传输服务")
 	singleServer := doCreateServer(singleFilePort)
 	if singleServer != nil {
 		defer singleServer.Close()
@@ -607,7 +602,7 @@ func doAutoBindServer() {
 
 //根据指定ip建立8848,8849,8850服务
 func doSpecificBindServer(ip string) {
-	singleServer := doBindServer(ip, singleFilePort)
+	singleServer := ynet.GetBindNet(ip, singleFilePort)
 	if singleServer != nil {
 		defer singleServer.Close()
 		fmt.Println("SServer Successful running in ", singleServer.Addr().String())
@@ -624,7 +619,7 @@ func doSpecificBindServer(ip string) {
 		listenUDP(ip)
 	}()
 
-	MServer := doBindServer(ip, mutilFilePort)
+	MServer := ynet.GetBindNet(ip, mutilFilePort)
 	if MServer != nil {
 		defer MServer.Close()
 		doAcceptMultiFileTranServer(MServer)
@@ -643,29 +638,86 @@ func gLog(a ...interface{}) (n int, err error) {
 	return fmt.Println(a)
 }
 
-func main() {
-	args := os.Args
-	argLen := len(args)
+var flags struct {
+	ListenIP string
+	RouteIP  string
+}
 
-	if argLen == 1 {
-		doAutoBindServer()
-	} else if argLen > 1 {
-		doWhat := args[1]
-		if doWhat == "-b" {
-			if argLen == 3 {
-				ip := args[2]
-				doSpecificBindServer(ip)
-			} else {
-				doHelp()
-			}
+func getUsage() {
+	flag.Usage()
+	fmt.Println("例如: yrecv")
+	fmt.Println("例如: yrecv -b 10.3.4.2")
+	fmt.Println("例如: yrecv -c 150.33.44.23 -b 10.3.4.2")
+}
 
-		} else if doWhat == "-h" {
-			doHelp()
-		} else {
-			doHelp()
-		}
+func doRouter(routeIp, listenIp string) {
+	conn, err0 := ynet.GetRemoteConnection(routeIp, ycomm.RoutePort)
+	if err0 != nil {
+		ylog.Logf(">>>连接远程Route[", routeIp+":"+ycomm.RoutePort, "]异常>>>>", err0)
+		return
+	}
+	ylog.Logf("yrecv成功连接远程[" + routeIp + ":" + ycomm.RoutePort + "]Router>>>>")
+
+	hostname, _ := os.Hostname()
+	coreN := runtime.NumCPU() * 2
+
+	//数据载体
+	yrbInfo := ycomm.YrecvBase{Cpu: strconv.Itoa(coreN), Name: hostname, Ip: listenIp}
+	//请求信息
+	req := ycomm.RequestInfo{
+		Cmd:   ycomm.YRECV_INIT,
+		Data:  ycomm.ParseYrecvBaseToJsonStr(yrbInfo),
+		Other: "no",
 	}
 
-	wg.Wait()
+	//ycomm.WriteMsg(conn, req.ParseToJsonStr())
+	ynet.SendRequest(conn, req)
+	ylog.Logf(">>>发送注册信息>>>", req.ParseToJsonStr(), ">>>到Route")
+
+	msgStr := ycomm.ReadMsg(conn)
+	ylog.Logf(">>>收到Route响应数据>>>", msgStr)
+
+	for {
+		ycomm.WriteMsg(conn, req.ParseToJsonStr())
+		ylog.Logf(">>>发送>>>", req.ParseToJsonStr(), ">>>到Route")
+
+		time.Sleep(7 * time.Second)
+	}
+
+}
+
+func main() {
+
+	flag.StringVar(&flags.RouteIP, "c", "", "路由ip")
+	flag.StringVar(&flags.ListenIP, "b", "", "指定监听ip")
+	flag.BoolVar(&ycomm.Debug, "debug", true, "debug mode")
+	flag.Parse()
+
+	ylog.Logf("输入参数==>[", flags, "]")
+
+	argLen := len(os.Args) //获取参数长度
+
+	if argLen == 1 { //默认自动获取ip监听模式
+		ylog.Logf("自动获取ip模式=====>>>>>>")
+		doAutoBindServer()
+		wg.Wait()
+
+	} else if flags.RouteIP != "" { //如果选择路由模式
+		//暂时路由模式 必须指定本地绑定ip
+		if flags.ListenIP == "" {
+			fmt.Println("错误(ERROR): 必须指定ListenIP")
+			os.Exit(01)
+		}
+		ylog.Logf("路由模式=====>>>>>>路由ip[", flags.RouteIP, "]===>本地绑定ip[", flags.ListenIP, "]")
+
+		doRouter(flags.RouteIP, flags.ListenIP)
+
+	} else if flags.ListenIP != "" { //如果是指定ip模式
+		ylog.Logf("指定ip模式=====>>>>>>[", flags.ListenIP, "]")
+		doSpecificBindServer(flags.ListenIP)
+		wg.Wait()
+	} else {
+		getUsage()
+	}
 
 }

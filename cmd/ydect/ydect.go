@@ -2,6 +2,9 @@ package main
 
 import (
 	ycomm "YTools/ycomm"
+	"YTools/ylog"
+	"YTools/ynet"
+	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -32,7 +35,115 @@ func doDetect(detectCondition string, listenIP string) {
 
 }
 
+var flags struct {
+	ListenIP string
+	RouteIP  string
+	DetectIP string
+}
+
+func getUsage() {
+	flag.Usage()
+	fmt.Println("例如: ydect -b 10.3.4.2")
+	fmt.Println("例如: ydect -c 150.33.44.23")
+}
+
+func doRouteDect(detectIp string) {
+	conn, err0 := ynet.GetRemoteConnection(detectIp, ycomm.RoutePort)
+	if err0 != nil {
+		ylog.Logf("网络连接>>>", detectIp+":"+ycomm.RoutePort, ">>>>异常[", err0, "]>>>doRouteDect连接失败====>退出")
+		return
+	}
+
+	req := ycomm.RequestInfo{
+		Cmd:   ycomm.YDECT_MSG,
+		Data:  "msg:no",
+		Other: "",
+	}
+
+	//ycomm.WriteMsg(conn, req.ParseToJsonStr())
+	//发起请求
+	ynet.SendRequest(conn, req)
+	ylog.Logf("向Route发送数据>>>>", req.ParseToJsonStr())
+
+	//接收响应数据
+	byte0, _ := ycomm.ReadByte0(conn)
+	resInfo := ycomm.ParseByteToResponseInfo(byte0)
+	ylog.Logf("获取到响应数据>>>", ycomm.ParseResponseToJsonStr(resInfo))
+
+	list := ycomm.ParseStrToYrecvBaseList(resInfo.Message)
+
+	//遍历响应数据
+	fmt.Println("Route注册信息:")
+	for _, v := range list {
+		v.Show()
+	}
+	conn.Close()
+
+}
+
 func main() {
+
+	flag.StringVar(&flags.RouteIP, "c", "", "路由ip")
+	flag.StringVar(&flags.ListenIP, "b", "", "指定监听ip")
+	flag.StringVar(&flags.DetectIP, "d", "", "指定探测ip")
+	flag.BoolVar(&ycomm.Debug, "debug", true, "debug mode")
+	flag.Parse()
+
+	ylog.Logf("输入参数==>[", os.Args, "]")
+
+	if flags.RouteIP != "" {
+		//do routeDect
+		doRouteDect(flags.RouteIP)
+	} else if flags.DetectIP != "" {
+		if flags.ListenIP == "" {
+			ylog.Logf("错误(ERROR): ListenIP为空>>>>>退出")
+			os.Exit(01)
+		}
+
+		doDect01(flags.ListenIP, flags.DetectIP)
+	}
+
+}
+
+func doDect01(listenIp, detectIp string) {
+	nr := ycomm.ParseUdpFormat(listenIp)
+
+	listen, err0 := net.ListenUDP("udp", &net.UDPAddr{
+		IP:   net.IPv4(nr[0], nr[1], nr[2], nr[3]),
+		Port: 8850, //port + 1 => 8849
+	})
+	if err0 != nil {
+		fmt.Println("UDP建立失败")
+		panic(err0)
+		os.Exit(-1)
+	}
+	fmt.Println("detect recv server running in " + listenIp)
+
+	defer listen.Close()
+
+	//do udp fun
+	wg.Add(1)
+	//接收文件
+	go func() {
+		defer wg.Done()
+		doDetect(detectIp, listenIp) //detectip
+	}()
+
+	for {
+		var data [64]byte
+		n, _, err := listen.ReadFromUDP(data[:]) // 接收数据
+		if err != nil {
+			fmt.Println("read udp failed, err:", err)
+			continue
+		}
+		fmt.Println("find: " + string(data[:n]))
+
+	}
+
+	wg.Wait()
+}
+
+func main1() {
 	args := os.Args
 	if len(args) != 3 {
 		fmt.Println("format must be => ydect ListenIp DetectIP")
