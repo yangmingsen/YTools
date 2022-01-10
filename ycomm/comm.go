@@ -339,6 +339,7 @@ func ParseMapToStr(dMap map[string]string) string {
 		} else {
 			reStr += k + "\a" + v + "\n"
 		}
+		i++
 	}
 	return reStr
 }

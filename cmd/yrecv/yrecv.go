@@ -595,7 +595,7 @@ func doAcceptMultiFileTranServer(netS net.Listener) {
 			ylog.Logf("响应ok信息给route>>>>")
 
 		} else if rMsg == ycomm.YROUTE_SEND_SINGLE_FILE {
-
+			ylog.Logf("收到来自yroute的YROUTE_SEND_SINGLE_FILE命令")
 			go doSingleFileHandler(conn)
 
 		} else {
@@ -696,6 +696,21 @@ func getUsage() {
 	fmt.Println("例如: yrecv -c 150.33.44.23 -b 10.3.4.2")
 }
 
+func doListenBaseConnEvent(conn net.Conn) {
+	ylog.Logf(">>>>监听BaseConn启动")
+	for {
+		//收取信息
+		rcvBytes, err0 := ycomm.ReadByte0(conn)
+		if err0 != nil {
+			fmt.Println("BaseConn 读取出错,退出")
+			break
+		}
+		rcvMsg := string(rcvBytes)
+
+		ylog.Logf("收到Yroute BaseConn 信息>>>>", rcvMsg)
+	}
+}
+
 func doRouter(routeIp, listenIp string) {
 	conn, err0 := ynet.GetRemoteConnection(routeIp, ycomm.RoutePort)
 	if err0 != nil {
@@ -723,14 +738,17 @@ func doRouter(routeIp, listenIp string) {
 	msgStr := ycomm.ReadMsg(conn)
 	ylog.Logf(">>>收到Route响应数据>>>", msgStr)
 
-	for {
-		ycomm.WriteMsg(conn, req.ParseToJsonStr())
-		ylog.Logf(">>>发送>>>", req.ParseToJsonStr(), ">>>到Route")
+	//
+	go doListenBaseConnEvent(conn)
 
-		time.Sleep(7 * time.Second)
-	}
+	ylog.Logf(">>>>>启动单文件,多文件传输及探测响应服务")
+	doSpecificBindServer(listenIp)
+	//阻塞
+	<-exitFlag
 
 }
+
+var exitFlag = make(chan bool)
 
 func main() {
 

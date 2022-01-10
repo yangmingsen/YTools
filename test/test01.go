@@ -123,6 +123,13 @@ func ParseStrToDataMap(str string) map[string]string {
 func main() {
 	var dMap = make(map[string]string)
 	dMap["hi"] = "yms"
+	dMap["nice"] = "10"
+	dMap["what"] = "okok"
+	dMap["when"] = "20201012"
+	str := ycomm.ParseMapToStr(dMap)
+
+	fmt.Print("str=", str)
+	fmt.Print("--------")
 
 }
 

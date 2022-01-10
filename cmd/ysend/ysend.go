@@ -519,6 +519,7 @@ func doSingleFileSend(sendName, filePath, targetIp string) {
 	if resp.Ok {
 		ylog.Logf(">>>>准备同步文件数据流")
 
+		wg.Add(1)
 		sendFile(yrouteConn, filePath)
 
 		ylog.Logf(">>>>同步文件数据流结束")
@@ -541,7 +542,7 @@ func main() {
 	flag.StringVar(&flags.RemoteIP, "d", "", "目标ip")
 	flag.StringVar(&flags.RemoteName, "dn", "", "dn[dest Name]远程目标名字")
 	flag.IntVar(&flags.goNumber, "sn", runtime.NumCPU()*2, "并发数[默认cpu*2]")
-	flag.BoolVar(&ycomm.Debug, "debug", false, "debug mode")
+	flag.BoolVar(&ycomm.Debug, "debug", true, "debug mode")
 	flag.Parse()
 
 	ylog.Logf("输入参数==>", flags)
@@ -549,6 +550,19 @@ func main() {
 	//直连与自动直连方式选择
 	if flags.RouteIP != "" { //自动直连方式
 		ylog.Logf("自动直连选择=======>")
+		if flags.RemoteName == "" {
+			fmt.Println("必须指定 -dn 目标名称")
+		}
+
+		if flags.SingleFilePath != "" {
+			ylog.Logf("发送单文件开始=======>")
+			doSingleFileSend(flags.RemoteName, flags.SingleFilePath, flags.RouteIP)
+			ylog.Logf("发送单文件=======>结束")
+		} else if flags.MultiFilePath != "" { //多文件
+
+		} else {
+			fmt.Println("必须指定传输文件名或文件夹")
+		}
 
 	} else if flags.RemoteIP != "" { //直连方式
 		ylog.Logf("直连选择=======>")

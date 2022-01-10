@@ -35,7 +35,7 @@ func SendResponse(conn net.Conn, res ycomm.ResponseInfo) {
 	ycomm.WriteMsg(conn, resStr)
 }
 
-//发送响应
+//发送请求
 func SendRequest(conn net.Conn, req ycomm.RequestInfo) {
 	ycomm.WriteMsg(conn, req.ParseToJsonStr())
 }
