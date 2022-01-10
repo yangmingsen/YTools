@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func ysendUsage() {
@@ -120,7 +121,7 @@ func ParseStrToDataMap(str string) map[string]string {
 	return resMap
 }
 
-func main() {
+func main33() {
 	var dMap = make(map[string]string)
 	dMap["hi"] = "yms"
 	dMap["nice"] = "10"
@@ -160,4 +161,28 @@ func updateT(rb *Robot) {
 type Robot struct {
 	Name   string `json:"name"`
 	Amount int    `json:"amount"`
+}
+
+var dMap = make(map[string]chan bool)
+
+func loadData(name string) {
+	fmt.Println("load data....")
+	time.Sleep(6 * time.Second)
+	fmt.Println("load ok...")
+
+	var ok = dMap[name]
+
+	ok <- true
+
+}
+
+func main() {
+	var fl = make(chan bool)
+	dMap["yms"] = fl
+	go loadData("yms")
+
+	fmt.Println("main wait")
+	//ws := dMap["yms"]
+	var dd = <-fl
+	fmt.Println("main close", dd)
 }

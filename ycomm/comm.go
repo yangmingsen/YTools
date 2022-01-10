@@ -5,11 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 )
 
 //Yrecv BaseConn指令
+//大海模式(单文件) route->yrecv : 表示要求yrecv端主要要与yroute建立连接
+const YRECV_BASECONN_SINGLE = "ybcs"
+
+//(心跳) route->yrecv
+const YRECV_BASECONN_HEADRTBEAT = "ybcht"
 
 //9949请求指令
 //yrout向yrecv发送检查连通性命令
@@ -20,8 +26,9 @@ const YROUTE_SEND_SINGLE_FILE = "y_s_s_f"
 
 //route 服务命令
 const (
-	YRECV_INIT = "yrecv_init" //yrecv注册信息
-	YDECT_MSG  = "ydect_msg"  //ydect探测信息
+	YRECV_INIT                   = "yrecv_init" //yrecv注册信息
+	YDECT_MSG                    = "ydect_msg"  //ydect探测信息
+	YRECV_REQUEST_ESTABLISH_CONN = "yreconn"    //yrecv主动请求建立连接
 )
 
 const (
@@ -29,14 +36,16 @@ const (
 	SizeKB int64 = 1048576
 	SizeMB int64 = 1073741824
 	SizeGB int64 = 1099511627776
+	B            = 1
+	KB           = 2
+	MB           = 3
+	GB           = 4
 )
 
-const (
-	B  = 1
-	KB = 2
-	MB = 3
-	GB = 4
-)
+const TO_TYPTE = "to_type"
+const SINGLE = "Single"
+const MULTI = "Multi"
+const HOSTNAME = "hostname"
 
 const (
 	MultiRemotePort  = "9949"
@@ -342,4 +351,9 @@ func ParseMapToStr(dMap map[string]string) string {
 		i++
 	}
 	return reStr
+}
+
+func GetHostName() string {
+	hostname, _ := os.Hostname()
+	return hostname
 }

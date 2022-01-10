@@ -49,6 +49,9 @@ type YrecvRegInfo struct {
 
 var yrecvRegInfo = make(map[string]YrecvRegInfo)
 
+//同步器 name->value
+var syncFlag = make(map[string]chan bool)
+
 //连通性检查
 func checkCanConnect(name string) {
 
@@ -118,6 +121,31 @@ func doTransferStream(fileSize int64, from, to net.Conn) {
 	}
 }
 
+func doSingleFileSync(fileSize int64, dMap map[string]string, from, to net.Conn) {
+	//向yrecv发送命令
+	ycomm.WriteMsg(to, ycomm.YROUTE_SEND_SINGLE_FILE)
+
+	//发送文件大小信息给yrecv
+	var sendMap = make(map[string]string)
+	sendMap["fileName"] = dMap["fileName"]
+	sendMap["fileSize"] = dMap["fileSize"]
+	sendStr := ycomm.ParseMapToStr(sendMap)
+	ylog.Logf("发送文件大小信息>>>>", sendStr)
+	ycomm.WriteMsg(to, sendStr)
+
+	//等待yrecv的响应
+	rcvMsg := ycomm.ReadMsg(to)
+	ylog.Logf("收到yrecv响应>>>>", rcvMsg)
+	resp := ycomm.ParseStrToResponseInfo(rcvMsg)
+	if resp.Ok {
+		//发送ok给ysend
+		ynet.SendResponse(from, ycomm.ResponseInfo{Ok: true, Message: "ok prepare fileSteam", Status: "ok"})
+		ylog.Logf("准备完毕...开始. ysend=>yroute=>yrecv")
+
+		doTransferStream(fileSize, from, to)
+	}
+}
+
 //处理单文件路由传输
 func doSingleFileHandler(requestInfo ycomm.RequestInfo, ysendConn net.Conn) {
 	//单文件传输
@@ -168,32 +196,13 @@ func doSingleFileHandler(requestInfo ycomm.RequestInfo, ysendConn net.Conn) {
 
 	if regInfo, ok := yrecvRegInfo[cName]; ok {
 		ylog.Logf("已匹配>>>", yrecvRegInfo[cName], ">>>>准备连接")
-		if regInfo.CanConn { //溪流模式
+		//if regInfo.CanConn { //溪流模式
+		if false { //溪流模式
 			ylog.Logf("溪流模式开始连接yrecv>>>>>", regInfo.Ip, ">>>>")
 			yrecvConn, err0 := ynet.GetRemoteConnection(regInfo.Ip, ycomm.MultiRemotePort)
 			if err0 == nil { //如果连接成功
-				//向yrecv发送命令
-				ycomm.WriteMsg(yrecvConn, ycomm.YROUTE_SEND_SINGLE_FILE)
-
-				//发送文件大小信息给yrecv
-				var sendMap = make(map[string]string)
-				sendMap["fileName"] = dMap["fileName"]
-				sendMap["fileSize"] = dMap["fileSize"]
-				sendStr := ycomm.ParseMapToStr(sendMap)
-				ylog.Logf("发送文件大小信息>>>>", sendStr)
-				ycomm.WriteMsg(yrecvConn, sendStr)
-
-				//等待yrecv的响应
-				rcvMsg := ycomm.ReadMsg(yrecvConn)
-				ylog.Logf("收到yrecv响应>>>>", rcvMsg)
-				resp := ycomm.ParseStrToResponseInfo(rcvMsg)
-				if resp.Ok {
-					//发送ok给ysend
-					ynet.SendResponse(ysendConn, ycomm.ResponseInfo{Ok: true, Message: "ok prepare fileSteam", Status: "ok"})
-					ylog.Logf("准备完毕...开始. ysend=>yroute=>yrecv")
-
-					doTransferStream(fileSize, ysendConn, yrecvConn)
-				}
+				doSingleFileSync(fileSize, dMap, ysendConn, yrecvConn)
+				ylog.Logf("溪流模式传输结束>>>>>")
 
 			} else { //如果连接yrecv失败
 				ylog.Logf("开始连接yrecv>>>>>", regInfo.Ip, ">>>>")
@@ -202,8 +211,39 @@ func doSingleFileHandler(requestInfo ycomm.RequestInfo, ysendConn net.Conn) {
 			}
 		} else { //大海模式
 			ylog.Logf("启动大海模式>>>>>")
+			//获取BaseConn
+			ynet.SendRequest(regInfo.BaseConn, ycomm.RequestInfo{
+				Cmd:   ycomm.YRECV_BASECONN_SINGLE,
+				Data:  "no",
+				Other: "no",
+			})
+			ylog.Logf("发送完毕>>>>等待接收响应>>>>")
 
-			ynet.SendResponse(ysendConn, ycomm.ResponseInfo{Ok: false, Message: "大海模式还未实现", Status: "no"})
+			rcvMsg := ycomm.ReadMsg(regInfo.BaseConn)
+			ylog.Logf("接收到响应数据>>>>", rcvMsg)
+			resp := ycomm.ParseStrToResponseInfo(rcvMsg)
+			if resp.Ok {
+				//如果成功
+				ylog.Logf("等待信号量响应>>>>")
+				var ok = <-syncFlag[cName] //阻塞
+				ylog.Logf("信号量响应>>>>", ok)
+
+				//获取yrecv端连接
+				var to = yrecvRegInfo[cName].SingleConn
+
+				if ok {
+					ylog.Logf("准备开始传输文件>>>>")
+					doSingleFileSync(fileSize, dMap, ysendConn, to)
+					ylog.Logf("传输文件结束>>>>")
+				}
+
+			} else {
+				//如果失败
+				ylog.Logf("失败>>>>", resp.Message)
+				ynet.SendResponse(ysendConn, ycomm.ResponseInfo{Ok: false, Message: resp.Message, Status: "no"})
+			}
+
+			//ynet.SendResponse(ysendConn, ycomm.ResponseInfo{Ok: false, Message: "大海模式还未实现", Status: "no"})
 		}
 	} else {
 		//如果请求的对象不存在，告诉ysend 重新更换名称
@@ -230,6 +270,20 @@ func doSingleFileHandler(requestInfo ycomm.RequestInfo, ysendConn net.Conn) {
 	//     2.2.3 ysend 退出发送功能
 	//
 	//3.如果不可用直连(大海),\
+	//	 3.1 大海模式传输每次必须,重新建立连接.
+	//	    3.1.1 使用BaseConn发送请求建立连接命令 YRECV_BASECONN_SINGLE,
+	//		3.1.2 然后进入等待BaseConn的响应(比如yrecv建立到yroute的连接是否成功) Response(ok: true/false)
+	//      3.1.3 如果收到true则开始信号量等待
+	//   3.2 yrecv 收到 YRECV_BASECONN_SINGLE命令后, 立即主动向yroute发起新连接请求 YRECV_REQUEST_ESTABLISH_CONN 命令
+	//   3.3 yroute收到请求后,立即将新singleConn连接,存入yrecvReg中. 立即通知大海模式线程,
+	//   3.4 大海模式收到信号量后,判断信号量状态
+	//		3.4.1 如果为true
+	//			3.4.1.1 向 yrecv 发出YROUTE_SEND_SINGLE_FILE(y_s_s_f)命令.
+	//			3.4.1.2  发送文件名称大小的信息,等待yrecv的响应,yrecv收到后响应Response{Ok: true}
+	//			3.4.1.3  回复ysend, 表示可以准备发送文件
+	//			3.4.1.4 ysend收到回复后,立即传输文件流数据
+	//		3.4.2 如果为false
+	//			3.4.2.1 那么响应ysend, 文件不可发送(超时未收到yrecv的响应)
 	//
 	//
 	//
@@ -248,7 +302,7 @@ func doRouter(ip string) {
 		for {
 			accept, err := bindNet.Accept()
 			if err != nil {
-				fmt.Println("错误(ERROR): accept错误=>[", err, "]")
+				ylog.Logf("错误(ERROR): accept错误=>[", err, "]")
 				continue
 			}
 
@@ -280,6 +334,7 @@ func doRouter(ip string) {
 						YrecvRegInfoNum--
 					}
 					YrecvRegInfoNum++
+					syncFlag[tmpYrecvRegInfo.Name] = make(chan bool)
 
 					yrecvRegInfo[tmpYrecvRegInfo.Name] = tmpYrecvRegInfo
 
@@ -322,6 +377,30 @@ func doRouter(ip string) {
 				{
 					ylog.Logf("YROUTE_SEND_SINGLE_FILE>>>开始处理")
 					go doSingleFileHandler(requestInfo, accept)
+				}
+			case ycomm.YRECV_REQUEST_ESTABLISH_CONN:
+				{
+					ylog.Logf("处理>>>>YRECV_REQUEST_ESTABLISH_CONN")
+					dMap := ycomm.ParseStrToMapData(requestInfo.Data)
+					tt := dMap[ycomm.TO_TYPTE]
+					if tt == ycomm.SINGLE { //
+						cName := dMap[ycomm.HOSTNAME]
+						if reg, ok := yrecvRegInfo[cName]; ok {
+							ylog.Logf(">>>>>存在>>>开始更新SingleConn")
+							reg.SingleConn = accept
+							yrecvRegInfo[cName] = reg
+							ylog.Logf(">>>>>存在>>>更新SingleConn完毕>>>当前Map>>", yrecvRegInfo[cName])
+							ylog.Logf(">>>>>发送信号量>>>true")
+							syncFlag[cName] <- true
+							ylog.Logf(">>>>>发送信号量>>>true结束")
+
+						} else {
+							ylog.Logf(">>>>>不存在>>>", cName)
+						}
+
+					} else if tt == ycomm.MULTI {
+
+					}
 				}
 
 			}

@@ -567,6 +567,36 @@ func doSingleFileHandler(conn net.Conn) {
 
 }
 
+func doHandlerRequest(conn net.Conn) bool {
+	//请求命令数据
+	rMsg := ycomm.ReadMsg(conn)
+	fmt.Println("接收到Client：" + conn.RemoteAddr().String() + " 请求类型：" + rMsg)
+	if rMsg == "d" {
+
+		wg.Add(1)
+		go doDirHandler(conn)
+	} else if rMsg == "f" {
+
+		wg.Add(1)
+		go doFileHandler(conn)
+
+	} else if rMsg == ycomm.YROUTE_CHECK_YRECV { //通用性检查命令
+		ylog.Logf("收到来自yrout的连接检查命令>>>>")
+
+		ynet.SendResponse(conn, ycomm.ResponseInfo{Ok: true, Message: "ok", Status: "ok"})
+		ylog.Logf("响应ok信息给route>>>>")
+
+	} else if rMsg == ycomm.YROUTE_SEND_SINGLE_FILE {
+		ylog.Logf("收到来自yroute的YROUTE_SEND_SINGLE_FILE命令")
+		go doSingleFileHandler(conn)
+
+	} else {
+		fmt.Println("======非法数据传入========")
+		return false
+	}
+	return true
+}
+
 func doAcceptMultiFileTranServer(netS net.Listener) {
 	fmt.Println("MServer Successful running in ", netS.Addr().String())
 	for {
@@ -576,30 +606,8 @@ func doAcceptMultiFileTranServer(netS net.Listener) {
 			continue
 		}
 
-		//请求命令数据
-		rMsg := ycomm.ReadMsg(conn)
-		fmt.Println("接收到Client：" + conn.RemoteAddr().String() + " 请求类型：" + rMsg)
-		if rMsg == "d" {
-
-			wg.Add(1)
-			go doDirHandler(conn)
-		} else if rMsg == "f" {
-
-			wg.Add(1)
-			go doFileHandler(conn)
-
-		} else if rMsg == ycomm.YROUTE_CHECK_YRECV { //通用性检查命令
-			ylog.Logf("收到来自yrout的连接检查命令>>>>")
-
-			ynet.SendResponse(conn, ycomm.ResponseInfo{Ok: true, Message: "ok", Status: "ok"})
-			ylog.Logf("响应ok信息给route>>>>")
-
-		} else if rMsg == ycomm.YROUTE_SEND_SINGLE_FILE {
-			ylog.Logf("收到来自yroute的YROUTE_SEND_SINGLE_FILE命令")
-			go doSingleFileHandler(conn)
-
-		} else {
-			fmt.Println("======非法数据传入========")
+		if doHandlerRequest(conn) == false {
+			ylog.Logf("错误: Yrecv主程序结束")
 			break
 		}
 
@@ -696,6 +704,7 @@ func getUsage() {
 	fmt.Println("例如: yrecv -c 150.33.44.23 -b 10.3.4.2")
 }
 
+//监听BaseConn事件
 func doListenBaseConnEvent(conn net.Conn) {
 	ylog.Logf(">>>>监听BaseConn启动")
 	for {
@@ -706,6 +715,50 @@ func doListenBaseConnEvent(conn net.Conn) {
 			break
 		}
 		rcvMsg := string(rcvBytes)
+		reqInfo := ycomm.ParseStrToRequestInfo(rcvMsg)
+		if reqInfo.Cmd == ycomm.YRECV_BASECONN_SINGLE { //大海模式 单文件传输
+			ylog.Logf("收到route大海模式传输单文件请求>>>>>>")
+			yroutConn, err1 := ynet.GetRemoteConnection(flags.RouteIP, ycomm.RoutePort)
+			if err1 != nil {
+				ylog.Logf("大海模式yrecv与yroute建立链接失败>>>>>>")
+				//如果在于route建立连接的情况下出错,返回失败信息
+				ynet.SendResponse(conn, ycomm.ResponseInfo{
+					Ok:      false,
+					Message: err1.Error(),
+					Status:  "no",
+				})
+			} else {
+				ynet.SendResponse(conn, ycomm.ResponseInfo{
+					Ok:      true,
+					Message: "ok",
+					Status:  "ok",
+				})
+				ylog.Logf("大海模式yrecv与yroute建立链接成功>>>>>>")
+				ylog.Logf("大海模式yrecv向yroute发送YRECV_REQUEST_ESTABLISH_CONN请求>>>>>>")
+
+				var dMap = make(map[string]string)
+				dMap[ycomm.TO_TYPTE] = ycomm.SINGLE
+				dMap[ycomm.HOSTNAME] = ycomm.GetHostName()
+				mapStr := ycomm.ParseMapToStr(dMap)
+				ylog.Logf("发送数据>>>", mapStr)
+
+				ynet.SendRequest(yroutConn, ycomm.RequestInfo{
+					Cmd:   ycomm.YRECV_REQUEST_ESTABLISH_CONN,
+					Data:  mapStr,
+					Other: "no",
+				})
+
+				//开始文件处理
+				ylog.Logf("大海模式: 准备接收文件数据>>>>>>")
+				go doHandlerRequest(yroutConn)
+				ylog.Logf("大海模式: 接收文件数据>>>>>>结束")
+
+			}
+
+		} else if reqInfo.Cmd == ycomm.YRECV_BASECONN_HEADRTBEAT {
+			//心跳
+			ylog.Logf("收到心跳>>>>>>")
+		}
 
 		ylog.Logf("收到Yroute BaseConn 信息>>>>", rcvMsg)
 	}
