@@ -6,6 +6,7 @@ import (
 	"YTools/ynet"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -127,10 +128,14 @@ func recvFile(conn net.Conn, fileName string, fileSize int64) {
 
 	buf := make([]byte, 4096)
 	for {
-		n, _ := conn.Read(buf)
+		n, err0 := conn.Read(buf)
 		current += int64(n)
-
 		file.Write(buf[:n])
+
+		if err0 != nil && err0 != io.EOF {
+			fmt.Println("读取网络流出错>>>>[", err0, "]")
+			return
+		}
 
 		if current == fileSize {
 			//fmt.Println("接收文件 ", fileName, " 完成")
@@ -534,6 +539,34 @@ func fileSizeReadable(fileSize int64) string {
 	return sizeStr
 }
 
+//处理单文件传输
+func doSingleFileHandler(conn net.Conn) {
+	//响应一下
+	//ynet.SendResponse(conn, ycomm.ResponseInfo{Ok: true, Message: "ok", Status: "ok"})
+	ylog.Logf("响应ok,准备接收单文件大小等信息>>>>")
+	rMsg := ycomm.ReadMsg(conn)
+	ylog.Logf("收到单文件传输数据[", rMsg, "]>>>>>>")
+
+	//数据格式 => 文件名称+大小
+	fileDataMap := ycomm.ParseStrToMapData(rMsg)
+
+	fileName := fileDataMap[ycomm.FILE_NAME]
+	fileSizeStr := fileDataMap[ycomm.FILE_SIZE]
+	ylog.Logf("解析后文件名[", fileName, "] 文件大小[", fileSizeStr, "]B")
+
+	//将string转换为64位int
+	fileSize, _ := strconv.ParseInt(fileSizeStr, 10, 64)
+	fmt.Println("正在接收文件【", fileName, "】 文件大小【", fileSizeReadable(fileSize), "】")
+
+	//响应yroute可以发送数据了
+	ynet.SendResponse(conn, ycomm.ResponseInfo{Ok: true, Message: "Prepare fileStream", Status: "Ok"})
+
+	ylog.Logf(">>>>准备接收文件流数据>>>>")
+	recvFile(conn, fileName, fileSize)
+	ylog.Logf(">>>>接收文件流数据完毕,结束>>>>")
+
+}
+
 func doAcceptMultiFileTranServer(netS net.Listener) {
 	fmt.Println("MServer Successful running in ", netS.Addr().String())
 	for {
@@ -542,6 +575,8 @@ func doAcceptMultiFileTranServer(netS net.Listener) {
 			fmt.Println("listener.Accept() err1:", err)
 			continue
 		}
+
+		//请求命令数据
 		rMsg := ycomm.ReadMsg(conn)
 		fmt.Println("接收到Client：" + conn.RemoteAddr().String() + " 请求类型：" + rMsg)
 		if rMsg == "d" {
@@ -552,6 +587,17 @@ func doAcceptMultiFileTranServer(netS net.Listener) {
 
 			wg.Add(1)
 			go doFileHandler(conn)
+
+		} else if rMsg == ycomm.YROUTE_CHECK_YRECV { //通用性检查命令
+			ylog.Logf("收到来自yrout的连接检查命令>>>>")
+
+			ynet.SendResponse(conn, ycomm.ResponseInfo{Ok: true, Message: "ok", Status: "ok"})
+			ylog.Logf("响应ok信息给route>>>>")
+
+		} else if rMsg == ycomm.YROUTE_SEND_SINGLE_FILE {
+
+			go doSingleFileHandler(conn)
+
 		} else {
 			fmt.Println("======非法数据传入========")
 			break

@@ -3,6 +3,7 @@ package main
 import (
 	ycomm "YTools/ycomm"
 	"YTools/ylog"
+	"YTools/ynet"
 	"flag"
 	"fmt"
 	"io"
@@ -480,6 +481,56 @@ func getUsage() {
 	fmt.Println("例如: ysend -r 文件夹 -d 目标Ip  -sn 并发数")
 	fmt.Println("例如: ysend -c 10.55.3.4 -dn yms -f 文件")
 	fmt.Println("例如: ysend -c 10.55.3.4 -dn yms -r 文件夹 -sn 并发数")
+}
+
+func doSingleFileSend(sendName, filePath, targetIp string) {
+
+	//提取文件信息
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		ylog.Logf("文件打开失败>>>>[", err, "]")
+		return
+	}
+
+	fileName := fileInfo.Name()    //获取文件名字
+	sendFileSize = fileInfo.Size() //获取文件大小
+
+	yrouteConn, err0 := ynet.GetRemoteConnection(targetIp, ycomm.RoutePort)
+	defer yrouteConn.Close()
+	if err0 != nil {
+		ylog.Logf("建立到远程route连接失败>>>>[", err0, "]")
+		return
+	}
+
+	//发送
+	var sendMap = make(map[string]string)
+	sendMap[ycomm.FILE_NAME] = fileName
+	sendMap[ycomm.SEND_TO_NAME] = sendName
+	sendMap[ycomm.FILE_SIZE] = strconv.FormatInt(sendFileSize, 10)
+	sendMsg := ycomm.ParseMapToStr(sendMap)
+	ylog.Logf("发送文件信息数据>>>>[", sendMsg, "]")
+	ynet.SendRequest(yrouteConn, ycomm.RequestInfo{Cmd: ycomm.YROUTE_SEND_SINGLE_FILE, Data: sendMsg, Other: "no"})
+
+	//等待yroute响应
+	resMsg := ycomm.ReadMsg(yrouteConn)
+	ylog.Logf("收到yroute的响应数据>>>>", resMsg)
+	resp := ycomm.ParseStrToResponseInfo(resMsg)
+
+	if resp.Ok {
+		ylog.Logf(">>>>准备同步文件数据流")
+
+		sendFile(yrouteConn, filePath)
+
+		ylog.Logf(">>>>同步文件数据流结束")
+
+	} else {
+		fmt.Println("异常: ", resp.Message)
+	}
+
+}
+
+func doRouter() {
+
 }
 
 func main() {

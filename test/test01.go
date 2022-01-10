@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"runtime"
 	"strconv"
+	"strings"
 )
 
 func ysendUsage() {
@@ -104,41 +105,52 @@ func parseArr() {
 
 }
 
+//解析示例：str := "name\ayms\nfileName\ahi.txt\nfileSize\a2342";
+//	fileSize => 2342
+//	name => yms
+//	fileName => hi.txt
+func ParseStrToDataMap(str string) map[string]string {
+	resMap := make(map[string]string)
+	sList := strings.Split(str, "\n")
+	for _, v := range sList {
+		s2 := strings.Split(v, "\a")
+		resMap[s2[0]] = s2[1]
+	}
+
+	return resMap
+}
+
 func main() {
-	parseArr()
+	var dMap = make(map[string]string)
+	dMap["hi"] = "yms"
+
+}
+
+func main12() {
+	str := "name\ayms\nfileName\ahi.txt\nfileSize\a2342"
+	dataMap := ParseStrToDataMap(str)
+	toStr := ycomm.ParseMapToStr(dataMap)
+
+	fmt.Print(toStr)
+	fmt.Println("-----------")
+
+}
+
+func main1() {
+	xx := Robot{Name: "yangmingsen", Amount: 10}
+	fmt.Println("xx=>", xx)
+	updateT(&xx)
+	fmt.Println("xx=>", xx)
+
+}
+
+func updateT(rb *Robot) {
+	rb.Name = "yms"
+	rb.Amount = 23
 }
 
 // 结构体定义
-type robot struct {
+type Robot struct {
 	Name   string `json:"name"`
 	Amount int    `json:"amount"`
-}
-
-// 解析到结构体数组
-func parse_array() {
-	fmt.Println("解析json字符串为结构体数组")
-	str := "[{\"name\":\"name1\",\"amount\":100},{\"name\":\"name2\",\"amount\":200},{\"name\":\"name3\",\"amount\":300},{\"name\":\"name4\",\"amount\":400}]"
-	all := []robot{}
-	err := json.Unmarshal([]byte(str), &all)
-	if err != nil {
-		fmt.Printf("err=%v", err)
-	}
-	for _, one := range all {
-		fmt.Printf("name=%v, amount=%v\n", one.Name, one.Amount)
-	}
-}
-
-// 解析到结构体指针的数组
-func parse_pointer_array() {
-	fmt.Println("解析json字符串为结构体指针的数组")
-	str := "[{\"name\":\"name1\",\"amount\":100},{\"name\":\"name2\",\"amount\":200},{\"name\":\"name3\",\"amount\":300},{\"name\":\"name4\",\"amount\":400}]"
-	all := []*robot{}
-	err := json.Unmarshal([]byte(str), &all)
-	if err != nil {
-		fmt.Printf("err=%v", err)
-	}
-	for _, one := range all {
-		fmt.Printf("name=%v, amount=%v\n", one.Name, one.Amount)
-	}
-
 }

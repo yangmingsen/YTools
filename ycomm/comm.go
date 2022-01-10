@@ -9,8 +9,21 @@ import (
 	"strings"
 )
 
-//单文件变量
-//======================================================================
+//Yrecv BaseConn指令
+
+//9949请求指令
+//yrout向yrecv发送检查连通性命令
+const YROUTE_CHECK_YRECV = "check"
+
+//yrout以直连方式向yrecv发送单个文件
+const YROUTE_SEND_SINGLE_FILE = "y_s_s_f"
+
+//route 服务命令
+const (
+	YRECV_INIT = "yrecv_init" //yrecv注册信息
+	YDECT_MSG  = "ydect_msg"  //ydect探测信息
+)
+
 const (
 	SizeB  int64 = 1024
 	SizeKB int64 = 1048576
@@ -31,10 +44,10 @@ const (
 	RoutePort        = "9950" //route端口
 )
 
-const (
-	YRECV_INIT = "yrecv_init" //yrecv注册信息
-	YDECT_MSG  = "ydect_msg"  //ydect探测信息
-)
+//字段常量名称
+const FILE_NAME = "fileName"
+const FILE_SIZE = "fileSize"
+const SEND_TO_NAME = "name"
 
 //注册信息 RequestInfo{cmd: "yrecv_init", data: "name:yms ip:192.168.25.88 cpu:8", other:""}
 //	响应信息ResponseInfo{ok: true, message:"Recvive", status:"OK"}
@@ -98,8 +111,6 @@ func ParseStrToYrecvBaseList(jsonStr string) []YrecvBase {
 	return newList
 }
 
-//多文件变量
-//======================================================================
 type CFileInfo struct {
 	Name  string `json:"name"`
 	IsDir bool   `json:"is_dir"`
@@ -300,4 +311,34 @@ func ParseUdpFormat(ip string) []byte {
 	res[3] = byte(d)
 
 	return res
+}
+
+//以/n作为数据分隔,以/a作为kv分隔
+//解析示例：str := "name\ayms\nfileName\ahi.txt\nfileSize\a2342";
+//	fileSize => 2342
+//	name => yms
+//	fileName => hi.txt
+func ParseStrToMapData(str string) map[string]string {
+	resMap := make(map[string]string)
+	sList := strings.Split(str, "\n")
+	for _, v := range sList {
+		s2 := strings.Split(v, "\a")
+		resMap[s2[0]] = s2[1]
+	}
+
+	return resMap
+}
+
+func ParseMapToStr(dMap map[string]string) string {
+	var reStr = ""
+	n := len(dMap)
+	i := 0
+	for k, v := range dMap {
+		if i+1 == n {
+			reStr += k + "\a" + v
+		} else {
+			reStr += k + "\a" + v + "\n"
+		}
+	}
+	return reStr
 }

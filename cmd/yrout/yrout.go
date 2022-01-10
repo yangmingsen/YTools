@@ -6,7 +6,9 @@ import (
 	"YTools/ynet"
 	"flag"
 	"fmt"
+	"io"
 	"net"
+	"strconv"
 )
 
 var yRouteExit = make(chan bool)
@@ -45,24 +47,28 @@ type YrecvRegInfo struct {
 	MultiConn  []net.Conn //用于当CanConn=false时,多文件传输通道,数量由mulNum确定
 }
 
-func (yrr *YrecvRegInfo) parseMap(dataMap map[string]string) {
-	for k, v1 := range dataMap {
-		switch k {
-		case "name":
-			yrr.Name = v1
-		case "ip":
-			yrr.Ip = v1
-		case "cpu":
-			yrr.Cpu = v1
-
-		}
-	}
-}
-
 var yrecvRegInfo = make(map[string]YrecvRegInfo)
 
-func doHandlerRequst(accept net.Conn) {
+//连通性检查
+func checkCanConnect(recvReg *YrecvRegInfo) {
+	conn, err0 := ynet.GetRemoteConnection(recvReg.Ip, ycomm.MultiRemotePort)
+	if err0 != nil {
+		ylog.Logf("Route直连Yrecv异常>>>[", err0, "]")
+		recvReg.CanConn = false
+	} else {
+		ycomm.WriteMsg(conn, ycomm.YROUTE_CHECK_YRECV)
+		ylog.Logf("向yrecv>>>端口", ycomm.MultiRemotePort, ">>>发送check命令")
 
+		byte0, _ := ycomm.ReadByte0(conn)
+		res := ycomm.ParseByteToResponseInfo(byte0)
+
+		ylog.Logf("收到来自yrecv的连通性检查响应数据>>>>[", res, "]")
+		if res.Ok {
+			ylog.Logf("可以连通>>>>>>")
+			recvReg.CanConn = true
+		}
+	}
+	conn.Close()
 }
 
 func doYrecvEvent(conn net.Conn) {
@@ -78,6 +84,142 @@ func doYrecvEvent(conn net.Conn) {
 	}
 }
 
+//处理单文件路由传输
+func doSingleFileHandler(requestInfo ycomm.RequestInfo, ysendConn net.Conn) {
+	//单文件传输
+	//ysend 请求信息
+	//RequestInfo{cmd: "y_s_s_f", data: "name/ayms/nfileName/ahi.txt/nfileSize/a2342" , other:"" }
+
+	//解析body数据
+	dMap := ycomm.ParseStrToMapData(requestInfo.Data)
+
+	//1.数据检验
+	var cName string
+	if name, ok := dMap[ycomm.SEND_TO_NAME]; ok == false {
+		ylog.Logf(">>>>ysend发送数据有误[name不存在]>>>>")
+		fmt.Println(">>>>ysend发送数据有误[name不存在]>>>>", requestInfo.ParseToJsonStr())
+
+		ynet.SendResponse(ysendConn, ycomm.ResponseInfo{Ok: false, Message: "name不存在", Status: "no"})
+
+		ysendConn.Close()
+	} else {
+		cName = name
+	}
+
+	var fileSize int64
+	if fsr, ok := dMap[ycomm.FILE_SIZE]; ok {
+		fileSizet, _ := strconv.ParseInt(fsr, 10, 64)
+		fileSize = fileSizet
+	} else {
+		ylog.Logf(">>>>ysend发送数据有误fileSize不存在]>>>>")
+		fmt.Println(">>>>ysend发送数据有误[fileSize不存在]>>>>")
+
+		ynet.SendResponse(ysendConn, ycomm.ResponseInfo{Ok: false, Message: "fileSize不存在", Status: "no"})
+
+		ysendConn.Close()
+	}
+
+	if _, ok := dMap[ycomm.FILE_NAME]; ok == false {
+		ylog.Logf(">>>>ysend发送数据有误fileName不存在]>>>>")
+		fmt.Println(">>>>ysend发送数据有误[fileName不存在]>>>>")
+
+		ynet.SendResponse(ysendConn, ycomm.ResponseInfo{Ok: false, Message: "fileName不存在", Status: "no"})
+
+		ysendConn.Close()
+	}
+
+	if regInfo, ok := yrecvRegInfo[cName]; ok {
+		if regInfo.CanConn { //溪流模式
+			ylog.Logf("开始连接yrecv>>>>>", regInfo.Ip, ">>>>")
+			yrecvConn, err0 := ynet.GetRemoteConnection(regInfo.Ip, ycomm.MultiRemotePort)
+			if err0 == nil { //如果连接成功
+				//向yrecv发送命令
+				ycomm.WriteMsg(yrecvConn, ycomm.YROUTE_SEND_SINGLE_FILE)
+
+				//发送文件大小信息给yrecv
+				var sendMap = make(map[string]string)
+				sendMap["fileName"] = dMap["fileName"]
+				sendMap["fileSize"] = dMap["fileSize"]
+				sendStr := ycomm.ParseMapToStr(sendMap)
+				ylog.Logf("发送文件大小信息>>>>", sendStr)
+				ycomm.WriteMsg(yrecvConn, sendStr)
+
+				//等待yrecv的响应
+				rcvMsg := ycomm.ReadMsg(yrecvConn)
+				ylog.Logf("收到yrecv响应>>>>", rcvMsg)
+				resp := ycomm.ParseStrToResponseInfo(rcvMsg)
+				if resp.Ok {
+					//发送ok给ysend
+					ynet.SendResponse(ysendConn, ycomm.ResponseInfo{Ok: true, Message: "ok prepare fileSteam", Status: "ok"})
+					ylog.Logf("准备完毕...开始. ysend=>yroute=>yrecv")
+
+					//开始转发流数据
+					buf := make([]byte, 4096)
+					var cur int64 = 0
+					for {
+						rn, err0 := ysendConn.Read(buf)
+						yrecvConn.Write(buf[:rn])
+						cur += int64(rn)
+
+						if cur == fileSize {
+							ylog.Logf("传输完毕>>>>>")
+							ysendConn.Close()
+							yrecvConn.Close()
+							break
+						}
+						if err0 != nil && err0 != io.EOF {
+							fmt.Println("读取网络流出错>>>>[", err0, "]")
+							ysendConn.Close()
+							yrecvConn.Close()
+							break
+						}
+
+					}
+				}
+
+			} else { //如果连接yrecv失败
+				ylog.Logf(">>>>yroute连接yrecv失败>>>>[", err0, "]")
+
+				ynet.SendResponse(ysendConn, ycomm.ResponseInfo{Ok: false, Message: "connect yrecv failed", Status: "no"})
+			}
+		} else { //大海模式
+
+		}
+	} else {
+		//如果请求的对象不存在，告诉ysend 重新更换名称
+		ylog.Logf(">>>>ysend发送数据有误[name不存在于yroute]>>>>")
+		fmt.Println(">>>>ysend发送数据有误[name不存在于yroute]>>>>")
+		ynet.SendResponse(ysendConn, ycomm.ResponseInfo{Ok: false, Message: "name不存在于yroute", Status: "no"})
+
+		ysendConn.Close()
+	}
+
+	//1.收到ysend的单文件传输请求时,解析name字段,然后根据name字段找到相应的yrecv信息
+	// 找到后, 判断是否可以直连。
+	//
+	//2.如果可以直连(溪流)
+	//  2.1 与yrecv直接发起TCP连接.
+	//	   2.1.1 如果连接成功,发出YROUTE_SEND_SINGLE_FILE(y_s_s_f)命令.
+	//	   2.1.2 发送文件名称大小的信息,等待yrecv的响应,yrecv收到后响应Response{Ok: true}
+	//     2.1.3 回复ysend, 表示可以准备发送文件
+	//     2.1.4 ysend收到回复后,立即传输文件流数据
+	//     2.1.5 yroute开始转发
+	//  2.2 如果没有成功发起TCP连接
+	//     2.2.1 返回失败信息给ysend
+	//     2.2.2 ysend 收到失败信息后立即断开与yroute的连接
+	//     2.2.3 ysend 退出发送功能
+	//
+	//3.如果不可用直连(大海),\
+	//
+	//
+	//
+	//向其发送 YROUTE_SEND_SINGLE_FILE(y_s_s_f)命令。
+
+	//2.等待yrecv的接收响应, 接收完毕后。 开始发送文件名称信息. 然后等待响应
+	//
+	//3.收到响应后,开始同步文件数据
+}
+
 func doRouter(ip string) {
 	bindNet := ynet.GetBindNet(ip, bindPort)
 
@@ -90,6 +232,7 @@ func doRouter(ip string) {
 				continue
 			}
 
+			//获取到请求数据
 			requestInfo := ycomm.ParseByteToRequestInfo(ycomm.ReadByte(accept))
 			ylog.Logf("收到请求数据===>[", requestInfo.ParseToJsonStr(), "]")
 			cmd := requestInfo.Cmd
@@ -104,6 +247,8 @@ func doRouter(ip string) {
 					//注册信息 RequestInfo{cmd: "yrecv_init", data: "YrecvBase{name:"yms", ip:"10.1.1.1", cpu:"8"}", other:""}
 					yrecvBaseInfo := ycomm.ParseStrToYrecvBase(requestInfo.Data)
 					tmpYrecvRegInfo.YrecvBase = yrecvBaseInfo
+					//保存当前基本连接
+					tmpYrecvRegInfo.BaseConn = accept
 
 					ylog.Logf("得到yrecv注册数据体[", yrecvBaseInfo.ParseToJsonStr(), "]")
 					ylog.Logf("获取到当前yrecv名称为[", yrecvBaseInfo.Name, "]>>>>")
@@ -122,7 +267,11 @@ func doRouter(ip string) {
 					res := ycomm.ResponseInfo{Ok: true, Message: "ok 收到注册信息", Status: "ok"}
 					ynet.SendResponse(accept, res)
 
-					go doYrecvEvent(accept)
+					//连通性检查
+					go checkCanConnect(&tmpYrecvRegInfo)
+
+					//处理事件
+					//go doYrecvEvent(accept)
 
 				}
 			case ycomm.YDECT_MSG:
@@ -149,11 +298,15 @@ func doRouter(ip string) {
 					ylog.Logf("发送完毕>>>>结束")
 					//accept.Close()
 				}
+			case ycomm.YROUTE_SEND_SINGLE_FILE:
+				{
+					go doSingleFileHandler(requestInfo, accept)
+				}
 
 			}
 
 			//处理连接请求
-			doHandlerRequst(accept)
+			//doHandlerRequst(accept)
 
 		}
 
