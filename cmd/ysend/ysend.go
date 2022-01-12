@@ -598,50 +598,54 @@ func doMultiFileSend(sendPath string) {
 	mStr := ycomm.ParseMapToStr(dMap)
 
 	ynet.SendRequest(routConn, ycomm.RequestInfo{Cmd: ycomm.YSEND_DIR_DATA_SYNC, Data: mStr, Other: "no"})
-
+	defer routConn.Close()
 	rcvMsg := ycomm.ReadMsg(routConn)
+	ylog.Logf("收到来自yroute的目录通信信息>>>", rcvMsg)
 	reps := ycomm.ParseStrToResponseInfo(rcvMsg)
-	if reps.Ok {
-		ylog.Logf("收到route>>>>", reps.Message)
 
-		ylog.Logf("读取目录/文件数据>>>>")
-		dirList, fList := getDirAndFileInfo(sendPath)
-		ylog.Logf("读取目录/文件数据>>>>完毕>>>开始发送目录数据")
-		doSyncDir(routConn, dirList)
-		routConn.Close() //关掉
-		ylog.Logf("完毕>>>发送目录数据>>>ok")
+	if reps.Ok == false {
+		ylog.Logf("同步目录数据错误>>>>>", reps.Message)
+		fmt.Println("同步目录数据错误>>>>>", reps.Message)
 
-		ylog.Logf(">>>准备发送文件列表数据")
+		return
+	}
 
-		routConn2, err2 := ynet.Socket(flags.RouteIP, ycomm.RoutePort)
-		if err2 != nil {
-			ylog.Logf("与Route建立连接失败>>>>>", err0)
-			return
-		}
+	ylog.Logf("收到route>>>>", reps.Message)
 
-		ynet.SendRequest(routConn2, ycomm.RequestInfo{
-			Cmd:  ycomm.YSEND_MUL_FILE_SYNC,
-			Data: mStr,
-		})
+	ylog.Logf("读取目录/文件数据>>>>")
+	dirList, fList := getDirAndFileInfo(sendPath)
+	ylog.Logf("读取目录/文件数据>>>>完毕>>>开始发送目录数据")
+	doSyncDir(routConn, dirList)
+	routConn.Close() //关掉
+	ylog.Logf("完毕>>>发送目录数据>>>ok")
 
-		ylog.Logf(">>>准备发送文件列表数据完毕>>>等待接收yroute响应")
-		rcvMsg := ycomm.ReadMsg(routConn2)
-		ylog.Logf("接收到yroute响应>>>>>", rcvMsg)
-		resp := ycomm.ParseStrToResponseInfo(rcvMsg)
-		routConn2.Close()
+	ylog.Logf(">>>准备发送文件列表数据")
 
-		ylog.Logf("接收到yroute响应消息>>>>>", resp.Message)
-		if resp.Ok {
-			ylog.Logf("准备同步文件流>>>>>")
-			syncFile(fList)
-			<-syncFileFlag
-			ylog.Logf("准备同步文件流>>>>>结束")
-		} else {
-			ylog.Logf("同步文件流失败>>>>>")
-		}
+	routConn2, err2 := ynet.Socket(flags.RouteIP, ycomm.RoutePort)
+	if err2 != nil {
+		ylog.Logf("与Route建立连接失败>>>>>", err0)
+		return
+	}
 
+	ynet.SendRequest(routConn2, ycomm.RequestInfo{
+		Cmd:  ycomm.YSEND_MUL_FILE_SYNC,
+		Data: mStr,
+	})
+
+	ylog.Logf(">>>准备发送文件列表数据完毕>>>等待接收yroute响应")
+	rcvMsg2 := ycomm.ReadMsg(routConn2)
+	ylog.Logf("接收到yroute响应>>>>>", rcvMsg2)
+	resp := ycomm.ParseStrToResponseInfo(rcvMsg2)
+	routConn2.Close()
+
+	ylog.Logf("接收到yroute响应消息>>>>>", resp.Message)
+	if resp.Ok {
+		ylog.Logf("准备同步文件流>>>>>")
+		syncFile(fList)
+		<-syncFileFlag
+		ylog.Logf("准备同步文件流>>>>>结束")
 	} else {
-		ylog.Logf("not ok>>>>>")
+		ylog.Logf("同步文件流失败>>>>>")
 	}
 
 }

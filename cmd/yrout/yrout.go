@@ -433,11 +433,22 @@ func doRouter(ip string) {
 
 						rcvMsg := ycomm.ReadMsg(regInfo.BaseConn)
 						ylog.Logf("收到来自yrecv的创建目录连接结果>>>>", rcvMsg)
+						resp := ycomm.ParseStrToResponseInfo(rcvMsg)
 
-						ynet.SendResponse(accept, ycomm.ResponseInfo{
+						//定义返回信息
+						resInfo := ycomm.ResponseInfo{
 							Ok:      true,
 							Message: "ok",
-						})
+						}
+
+						//返回失败
+						if resp.Ok == false {
+							ynet.SendResponse(accept, resInfo)
+						}
+
+						//返回成功
+						resInfo.Ok = true
+						ynet.SendResponse(accept, resInfo)
 
 						cNmae := regInfo.Name
 						<-syncFlag[cNmae]

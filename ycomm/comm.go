@@ -286,7 +286,7 @@ func isIncludeIP(ip string) bool {
 	return false
 }
 
-// 获取所有ipv4绑定列表
+// GetLocalIpv4List 获取所有ipv4绑定列表
 func GetLocalIpv4List() []string {
 	addrs, err := net.InterfaceAddrs() //获取所有ip地址, 包含ipv4,ipv6
 	if err != nil {
@@ -314,7 +314,7 @@ func GetLocalIpv4List() []string {
 	return res
 }
 
-//解析ipv4为数组格式
+// ParseUdpFormat 解析ipv4为数组格式
 func ParseUdpFormat(ip string) []byte {
 	res := make([]byte, 4)
 	//splitStr := strings.Split(ip,":")
@@ -336,7 +336,7 @@ func ParseUdpFormat(ip string) []byte {
 	return res
 }
 
-//以/n作为数据分隔,以/a作为kv分隔
+// ParseStrToMapData 以/n作为数据分隔,以/a作为kv分隔
 //解析示例：str := "name\ayms\nfileName\ahi.txt\nfileSize\a2342";
 //	fileSize => 2342
 //	name => yms
