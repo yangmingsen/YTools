@@ -658,7 +658,7 @@ func main() {
 	flag.StringVar(&flags.RemoteIP, "d", "", "目标ip")
 	flag.StringVar(&flags.RemoteName, "dn", "", "dn[dest Name]远程目标名字")
 	flag.IntVar(&flags.goNumber, "sn", runtime.NumCPU()*2, "并发数[默认cpu*2]")
-	flag.BoolVar(&ycomm.Debug, "debug", true, "debug mode")
+	flag.BoolVar(&ycomm.Debug, "debug", false, "debug mode")
 	flag.Parse()
 
 	ylog.Logf("输入参数==>", flags)

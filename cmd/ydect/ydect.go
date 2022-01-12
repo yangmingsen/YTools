@@ -63,7 +63,7 @@ func main() {
 	flag.StringVar(&flags.RouteIP, "c", "", "路由ip")
 	flag.StringVar(&flags.ListenIP, "b", "", "指定监听ip")
 	flag.StringVar(&flags.DetectIP, "d", "", "指定探测ip")
-	flag.BoolVar(&ycomm.Debug, "debug", true, "debug mode")
+	flag.BoolVar(&ycomm.Debug, "debug", false, "debug mode")
 	flag.Parse()
 
 	ylog.Logf("输入参数==>[", os.Args, "]")
