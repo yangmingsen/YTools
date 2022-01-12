@@ -1,7 +1,7 @@
 package main
 
 import (
-	ycomm "YTools/ycomm"
+	"YTools/ycomm"
 	"YTools/ylog"
 	"YTools/ynet"
 	"flag"
@@ -331,6 +331,15 @@ func handleRecvFile(listener net.Listener) {
 //***********************************************************************
 
 func doCreateServer(port string) net.Listener {
+	socket, err := ynet.ServerSocket(port)
+	if err != nil {
+		ylog.Logf("建立网络Listen出错>>>>", err)
+		return nil
+	}
+	return socket
+}
+
+func doCreateServer2(port string) net.Listener {
 	listenIp := ycomm.GetLocalIpv4List()
 	ipLen := len(listenIp)
 	if ipLen == 0 {
@@ -338,6 +347,7 @@ func doCreateServer(port string) net.Listener {
 		return nil
 	}
 
+	//
 	for _, theIp := range listenIp {
 		bindServer := ynet.GetBindNet(theIp, port)
 		if bindServer != nil {
@@ -388,10 +398,7 @@ func fileExists(path string) (bool, os.FileInfo, error) {
 	return true, f, err
 }
 
-// 处理目录建立
-func doDirHandler(conn net.Conn) {
-	defer wg.Done()
-
+func doDirCreate(conn net.Conn) {
 	rcvMsg := ycomm.ReadMsg(conn)
 	response := ycomm.ResponseInfo{Ok: true, Message: "收到目录数据", Status: "Ok"}
 	ycomm.WriteMsg(conn, ycomm.ParseResponseToJsonStr(response))
@@ -414,15 +421,21 @@ func doDirHandler(conn net.Conn) {
 	ycomm.WriteMsg(conn, ycomm.ParseResponseToJsonStr(response))
 
 	//关闭连接
-	defer conn.Close()
+	//defer conn.Close()
 
 	fmt.Println("目录建立完毕....")
+}
+
+// 处理目录建立
+func doDirHandler(conn net.Conn) {
+	defer wg.Done()
+	doDirCreate(conn)
 }
 
 //
 func doFileHandler(conn net.Conn) {
 	defer wg.Done()
-	//准备断点续传（如果大于25M的文件采取该行为)
+	//准备断点续传（如果大于25M的文件采取该行为) =>未实现
 	//largeSize := int64(26214400)// 25B*1024*1024 => 26214400B =>25MB
 
 	for {
@@ -586,7 +599,7 @@ func doHandlerRequest(conn net.Conn) bool {
 		ynet.SendResponse(conn, ycomm.ResponseInfo{Ok: true, Message: "ok", Status: "ok"})
 		ylog.Logf("响应ok信息给route>>>>")
 
-	} else if rMsg == ycomm.YROUTE_SEND_SINGLE_FILE {
+	} else if rMsg == ycomm.YSEND_TO_YROUTE_TO_YRECV_SINGLE_FILE {
 		ylog.Logf("收到来自yroute的YROUTE_SEND_SINGLE_FILE命令")
 		go doSingleFileHandler(conn)
 
@@ -642,12 +655,13 @@ func doAutoBindServer() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if singleServer != nil {
-			ipStr := singleServer.Addr().String()
-			listenUDP(ipStr)
-		} else {
-			listenUDP("nil")
-		}
+		listenUDP(ycomm.LOCAL_HOST)
+		//if singleServer != nil {
+		//	ipStr := singleServer.Addr().String()
+		//	listenUDP(ipStr)
+		//} else {
+		//	listenUDP("nil")
+		//}
 
 	}()
 
@@ -715,7 +729,9 @@ func doListenBaseConnEvent(conn net.Conn) {
 			break
 		}
 		rcvMsg := string(rcvBytes)
+		ylog.Logf("收到Yroute BaseConn 信息>>>>", rcvMsg)
 		reqInfo := ycomm.ParseStrToRequestInfo(rcvMsg)
+
 		if reqInfo.Cmd == ycomm.YRECV_BASECONN_SINGLE { //大海模式 单文件传输
 			ylog.Logf("收到route大海模式传输单文件请求>>>>>>")
 			yroutConn, err1 := ynet.GetRemoteConnection(flags.RouteIP, ycomm.RoutePort)
@@ -758,10 +774,114 @@ func doListenBaseConnEvent(conn net.Conn) {
 		} else if reqInfo.Cmd == ycomm.YRECV_BASECONN_HEADRTBEAT {
 			//心跳
 			ylog.Logf("收到心跳>>>>>>")
+
+		} else if reqInfo.Cmd == ycomm.YSEND_DIR_DATA_SYNC {
+			ylog.Logf("收到YSEND_DIR_DATA_SYNC>>>>开始处理")
+
+			newYRoutConn, err01 := ynet.Socket(flags.RouteIP, ycomm.RoutePort)
+			if err01 != nil {
+				ylog.Logf("创建同步目录数据连接失败>>>>>", err01)
+				ynet.SendResponse(conn, ycomm.ResponseInfo{
+					Ok:      false,
+					Message: "创建同步目录数据连接失败>>>" + err01.Error(),
+				})
+			}
+
+			var dMap = make(map[string]string)
+			dMap[ycomm.TO_TYPTE] = ycomm.SINGLE
+			dMap[ycomm.HOSTNAME] = ycomm.GetHostName()
+			mapStr1 := ycomm.ParseMapToStr(dMap)
+			ylog.Logf("创建同步连接发送数据>>>", mapStr1)
+
+			ynet.SendRequest(newYRoutConn, ycomm.RequestInfo{
+				Cmd:   ycomm.YRECV_REQUEST_ESTABLISH_CONN,
+				Data:  mapStr1,
+				Other: "no",
+			})
+
+			//返回信息
+			ylog.Logf("Ok 开始同步目录数据...>>>>>>")
+			ynet.SendResponse(conn, ycomm.ResponseInfo{
+				Ok:      true,
+				Message: "Ok 开始同步目录数据...",
+			})
+
+			ylog.Logf("准备从Route读取目录数据...>>>>>>")
+			rMsg := ycomm.ReadMsg(newYRoutConn)
+			if rMsg == "d" {
+				ylog.Logf("收到YSEND_DIR_DATA_SYNC>>>>开始处理目录数据>>>>")
+				doDirCreate(newYRoutConn)
+				ylog.Logf("处理目录数据完毕>>>>")
+			}
+
+		} else if reqInfo.Cmd == ycomm.YSEND_MUL_FILE_SYNC {
+			ylog.Logf("收到YSEND_MUL_FILE_SYNC>>>>开始处理>>>", reqInfo.ParseToJsonStr())
+			dMap := ycomm.ParseStrToMapData(reqInfo.Data)
+			coreStr := dMap[ycomm.CORE_NUM]
+
+			coreNum, _ := strconv.Atoi(coreStr)
+
+			var connList = make([]net.Conn, coreNum)
+			var flag01 = false
+			for i := 0; i < coreNum; i++ {
+				routConn, err01 := ynet.Socket(flags.RouteIP, ycomm.RoutePort)
+				if err01 != nil {
+					flag01 = true
+					break
+				}
+				connList[i] = routConn
+			}
+			if flag01 {
+				ynet.SendResponse(conn, ycomm.ResponseInfo{
+					Ok:      false,
+					Message: "创建连接失败",
+				})
+
+				for i := 0; i < coreNum; i++ {
+					//循环关闭
+					connList[i].Close()
+				}
+
+				continue
+			}
+			//成功返回
+			ynet.SendResponse(conn, ycomm.ResponseInfo{
+				Ok:      true,
+				Message: "创建连接成功",
+			})
+			ylog.Logf("创建", coreNum, "个连接成功>>>>")
+
+			for i := 0; i < coreNum; i++ {
+				ylog.Logf("准备向yrout发起YRECV_REQUEST_ESTABLISH_CONN=>MULTI>>>>>>>", i)
+				go doParepareAcceptFileStream(connList[i])
+			}
+
+			ylog.Logf("创建所有连接完毕>>>>")
+
 		}
 
-		ylog.Logf("收到Yroute BaseConn 信息>>>>", rcvMsg)
 	}
+}
+
+func doParepareAcceptFileStream(conn net.Conn) {
+
+	var dMap = make(map[string]string)
+	dMap[ycomm.TO_TYPTE] = ycomm.MULTI
+	dMap[ycomm.HOSTNAME] = ycomm.GetHostName()
+	mapStr := ycomm.ParseMapToStr(dMap)
+	ylog.Logf("发送数据>>>", mapStr)
+
+	ynet.SendRequest(conn, ycomm.RequestInfo{
+		Cmd:   ycomm.YRECV_REQUEST_ESTABLISH_CONN,
+		Data:  mapStr,
+		Other: "no",
+	})
+
+	//开始文件处理
+	ylog.Logf("大海模式: 准备接收文件流数据>>>>>>")
+	doHandlerRequest(conn)
+	ylog.Logf("大海模式: 接收文件流数据>>>>>>结束")
+
 }
 
 func doRouter(routeIp, listenIp string) {

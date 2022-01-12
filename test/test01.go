@@ -2,9 +2,11 @@ package main
 
 import (
 	"YTools/ycomm"
+	"YTools/ynet"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"runtime"
 	"strconv"
 	"strings"
@@ -176,7 +178,7 @@ func loadData(name string) {
 
 }
 
-func main() {
+func main31() {
 	var fl = make(chan bool)
 	dMap["yms"] = fl
 	go loadData("yms")
@@ -185,4 +187,126 @@ func main() {
 	//ws := dMap["yms"]
 	var dd = <-fl
 	fmt.Println("main close", dd)
+}
+
+var bu = make(chan bool)
+
+func bUser() {
+
+	socket, err0 := ynet.Socket(ycomm.LOCAL_HOST, ycomm.RoutePort)
+	if err0 != nil {
+		panic(err0)
+	}
+
+	go func() {
+
+		for i := 0; i < 10; i++ {
+			s := "bUser send [" + strconv.Itoa(i) + "]"
+			ycomm.WriteMsg(socket, s)
+			time.Sleep(3 * time.Second)
+		}
+	}()
+
+	go func() {
+		for i := 0; i < 10; i++ {
+			msg := ycomm.ReadMsg(socket)
+			fmt.Println("bUser Recv: ", msg)
+		}
+
+		bu <- true
+
+	}()
+
+	<-bu
+}
+
+var au = make(chan bool)
+
+func aUser() {
+
+	socket, err0 := ynet.Socket(ycomm.LOCAL_HOST, ycomm.RoutePort)
+	if err0 != nil {
+		panic(err0)
+	}
+
+	go func() {
+
+		for i := 0; i < 10; i++ {
+			s := "aUser send [" + strconv.Itoa(i) + "]"
+			ycomm.WriteMsg(socket, s)
+			time.Sleep(3 * time.Second)
+		}
+	}()
+
+	go func() {
+		for i := 0; i < 10; i++ {
+			msg := ycomm.ReadMsg(socket)
+			fmt.Println("aUser Recv: ", msg)
+		}
+
+		au <- true
+
+	}()
+
+	<-au
+}
+
+func doReadWrite(from, to net.Conn) {
+
+	from.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	to.SetWriteDeadline(time.Now().Add(15 * time.Second))
+
+	buf := make([]byte, 512)
+	for {
+		rn, err0 := from.Read(buf)
+		if err0 != nil {
+			fmt.Println(err0)
+			break
+		}
+		_, err1 := to.Write(buf[:rn])
+		if err1 != nil {
+			fmt.Println(err1)
+			break
+		}
+
+	}
+}
+
+var aConn net.Conn
+var bConn net.Conn
+var cnt = 0
+
+func doRouter() {
+	serverSocket, _ := ynet.ServerSocket(ycomm.RoutePort)
+	fmt.Println("Router启动成功....")
+
+	for {
+		conn, _ := serverSocket.Accept()
+
+		if cnt == 0 {
+			aConn = conn
+		} else {
+			bConn = conn
+
+			go doReadWrite(aConn, bConn)
+			go doReadWrite(bConn, aConn)
+
+		}
+		cnt++
+
+	}
+
+}
+
+var ma = make(chan bool)
+
+func main() {
+	//	go doRouter()
+
+	go aUser()
+
+	go bUser()
+
+	<-ma
+
 }

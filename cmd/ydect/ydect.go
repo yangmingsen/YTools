@@ -48,36 +48,13 @@ func getUsage() {
 }
 
 func doRouteDect(detectIp string) {
-	conn, err0 := ynet.GetRemoteConnection(detectIp, ycomm.RoutePort)
-	if err0 != nil {
-		ylog.Logf("网络连接>>>", detectIp+":"+ycomm.RoutePort, ">>>>异常[", err0, "]>>>doRouteDect连接失败====>退出")
-		return
-	}
-
-	req := ycomm.RequestInfo{
-		Cmd:   ycomm.YDECT_MSG,
-		Data:  "msg:no",
-		Other: "",
-	}
-
-	//ycomm.WriteMsg(conn, req.ParseToJsonStr())
-	//发起请求
-	ynet.SendRequest(conn, req)
-	ylog.Logf("向Route发送数据>>>>", req.ParseToJsonStr())
-
-	//接收响应数据
-	byte0, _ := ycomm.ReadByte0(conn)
-	resInfo := ycomm.ParseByteToResponseInfo(byte0)
-	ylog.Logf("获取到响应数据>>>", ycomm.ParseResponseToJsonStr(resInfo))
-
-	list := ycomm.ParseStrToYrecvBaseList(resInfo.Message)
+	list := ynet.GetRemoteRegInfo(detectIp)
 
 	//遍历响应数据
 	fmt.Println("Route注册信息:")
 	for _, v := range list {
 		v.Show()
 	}
-	conn.Close()
 
 }
 

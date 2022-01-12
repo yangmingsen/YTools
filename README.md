@@ -61,3 +61,40 @@ ysend的每个TCP连接,route对应yrecv的每个TCP连接(ysend=>route=>yrecv)
 8.route接到数据信息后，从yConnList中取出一条yConn,进行转发
 
 9.结束
+
+#### 大海多文件
+1. ysend向yrout发送YDECT_MSG命令获取所有yrcv服务列表(YList)
+   1. 根据需要目标名称dn遍历YList,获取对应的yrecv注册信息(yrcvInfo)
+   2. 如果yrcvInfo存在
+      1. 计算goNum(goNum=(本机core*2 + yrecvInfo.Cpu)/2)),也就是需要开启的任务数
+   3. 如果yrcvInfo不存在
+      1. 结束当前发送任务
+   
+2. ysend读取目录文件数据
+   1. 发送目录数据
+      1. ysend向yrout发起Reuest{cmd:YSEND_DIR_DATA_SYNC, data:"name:yms"} => d1,
+      2. yrout接到ysend的数据d1后,根据d1.data.name去YrecvRegInfo找到对应的BaseConn=>ybc
+      3. yrout向ybc连接发送{cmd: YSEND_DIR_DATA_SYNC, data:"no"} => d2
+      4. yrecv收到yrout数据d2后, 立即掉函数doHandlerRequest(传入当前连接-与yrout的连接)
+      5. doTransfer => =>
+      6. ysend继续发送数据 d
+      7. yrout继续网ybc连接发送数据 d
+      8. ysend向yrout发送目录数据(dirData)
+      9. yrout收到ysend的dirData后,发送至ybc连接
+      10. yrout等待读取yrecv的第一次响应数据,收到后转发给ysend
+      11. yrout继续循环等待yrecv传输信息
+          1. 循环接收yrecv的目录建立信息,收到后转发给ysend
+          2. 当遇到resp.Ok=true的时候结束
+      12. 发送Response{Ok=true}到ysend
+      13. 结束当前数据转发
+      
+   2. 发送文件
+      1. ysend向yrout发起Reuest{cmd:YSEND_MUL_FILE_SYNC data:"name:yms"} => d1,
+      2. yrout接到ysend的数据d1后,根据d1.data.name去YrecvRegInfo找到对应的BaseConn=>ybc
+      3. yrout向ybc连接发送{cmd: YSEND_MUL_FILE_SYNC, data:"core:3"} => d2
+      4. yrecv收到yrout数据d2后,开始向yrout主动建立d2.core个连接,请求Request{cmd: YRECV_REQUEST_ESTABLISH_CONN, data:"name:yms,type:mul",other:""}
+      5. yrout收到连接后，将连接推入chan中
+      6. 当yrecv的core连接全部建立完毕后,通知ysend开始发送
+      7. ysend收到后,先向yrout发Request{cmd: YSEND_MUL_FILE_SYNC2, data:"name:yms",other:""}
+      8. 开始 doTransfer
+   3. 结束

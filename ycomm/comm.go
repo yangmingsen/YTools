@@ -11,6 +11,7 @@ import (
 )
 
 //Yrecv BaseConn指令
+
 //大海模式(单文件) route->yrecv : 表示要求yrecv端主要要与yroute建立连接
 const YRECV_BASECONN_SINGLE = "ybcs"
 
@@ -21,25 +22,33 @@ const YRECV_BASECONN_HEADRTBEAT = "ybcht"
 //yrout向yrecv发送检查连通性命令
 const YROUTE_CHECK_YRECV = "check"
 
-//yrout以直连方式向yrecv发送单个文件
-const YROUTE_SEND_SINGLE_FILE = "y_s_s_f"
+const YSEND_DIR_DATA_SYNC = "ydds"
+
+const YSEND_MUL_FILE_SYNC = "ymfs"
+
+const YSEND_MUL_FILE_SYNC2 = "ymfs2"
 
 //route 服务命令
 const (
 	YRECV_INIT                   = "yrecv_init" //yrecv注册信息
 	YDECT_MSG                    = "ydect_msg"  //ydect探测信息
 	YRECV_REQUEST_ESTABLISH_CONN = "yreconn"    //yrecv主动请求建立连接
+	//ysend向yrecv发送单个文件
+	YSEND_TO_YROUTE_TO_YRECV_SINGLE_FILE = "y_s_s_f"
+	//ysend=>yrecv多文件发送
+	YSEND_TO_YROUTE_TO_YRECV_MULTI_FILE = "yssmf"
 )
 
 const (
-	SizeB  int64 = 1024
-	SizeKB int64 = 1048576
-	SizeMB int64 = 1073741824
-	SizeGB int64 = 1099511627776
-	B            = 1
-	KB           = 2
-	MB           = 3
-	GB           = 4
+	SizeB          int64 = 1024
+	SizeKB         int64 = 1048576
+	SizeMB         int64 = 1073741824
+	SizeGB         int64 = 1099511627776
+	B                    = 1
+	KB                   = 2
+	MB                   = 3
+	GB                   = 4
+	GOBAL_TASK_NUM       = 3
 )
 
 const TO_TYPTE = "to_type"
@@ -47,16 +56,21 @@ const SINGLE = "Single"
 const MULTI = "Multi"
 const HOSTNAME = "hostname"
 
+//一般代码yrecv注册名称
+const REMOTE_NAME = "remoteName"
+
 const (
 	MultiRemotePort  = "9949"
 	SingleRemotePort = "8848" //单文件端口
 	RoutePort        = "9950" //route端口
+	LOCAL_HOST       = "0.0.0.0"
 )
 
 //字段常量名称
 const FILE_NAME = "fileName"
 const FILE_SIZE = "fileSize"
 const SEND_TO_NAME = "name"
+const CORE_NUM = "coreNum"
 
 //注册信息 RequestInfo{cmd: "yrecv_init", data: "name:yms ip:192.168.25.88 cpu:8", other:""}
 //	响应信息ResponseInfo{ok: true, message:"Recvive", status:"OK"}
