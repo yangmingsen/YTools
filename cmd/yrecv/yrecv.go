@@ -720,6 +720,7 @@ func getUsage() {
 
 //监听BaseConn事件
 func doListenBaseConnEvent(conn net.Conn) {
+
 	ylog.Logf(">>>>监听BaseConn启动")
 	for {
 		//收取信息
