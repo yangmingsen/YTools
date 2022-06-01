@@ -303,10 +303,11 @@ var ma = make(chan bool)
 func main() {
 	//	go doRouter()
 
-	go aUser()
+	conn, err := ynet.Socket("192.168.25.71", ycomm.RoutePort)
+	if err != nil {
+		panic(err)
+	}
 
-	go bUser()
-
-	<-ma
+	ycomm.WriteMsg(conn, "hello, world")
 
 }
