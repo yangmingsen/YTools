@@ -10,6 +10,11 @@ import (
 	"strings"
 )
 
+//版本号
+const YROUTER_V = "20220603"
+const YRECV_V = "20220603"
+const YSEND_V = "20220603"
+
 //Yrecv BaseConn指令
 
 //大海模式(单文件) route->yrecv : 表示要求yrecv端主要要与yroute建立连接

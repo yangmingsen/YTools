@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"strconv"
 )
 
@@ -298,6 +297,7 @@ func doRouter(ip string) {
 	bindNet := ynet.GetBindNet(ip, bindPort)
 
 	if bindNet != nil {
+		fmt.Println("RouterServer Version [", ycomm.YROUTER_V, "]")
 		ylog.Logf("Router启动成功于[" + ip + ":" + bindPort + "]")
 		for {
 			accept, err := bindNet.Accept()
@@ -547,18 +547,17 @@ func doMultiFileSync(conn net.Conn, requestInfo ycomm.RequestInfo) {
 func main() {
 
 	flag.StringVar(&flags.ListenIP, "b", "", "指定监听ip")
-	flag.BoolVar(&ycomm.Debug, "debug", false, "debug mode")
+	flag.BoolVar(&ycomm.Debug, "debug", true, "debug mode")
 	flag.Parse()
 
 	ylog.Logf("输入参数==>[", flags, "]")
 
 	if flags.ListenIP != "" {
-		ylog.Logf(">>>启动Router")
+		ylog.Logf(">>>启动Router => Ip")
 		doRouter(flags.ListenIP)
-	} else if len(os.Args) == 1 {
-		doRouter(ycomm.LOCAL_HOST)
 	} else {
-		getUsage()
+		ylog.Logf(">>>启动Router => Local")
+		doRouter(ycomm.LOCAL_HOST)
 	}
 
 	//<-yRouteExit //阻塞
