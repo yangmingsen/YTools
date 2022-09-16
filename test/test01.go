@@ -205,6 +205,8 @@ func bUser() {
 			ycomm.WriteMsg(socket, s)
 			time.Sleep(3 * time.Second)
 		}
+		// HelOo
+
 	}()
 
 	go func() {
