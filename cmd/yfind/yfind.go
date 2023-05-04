@@ -1,164 +1,135 @@
 package main
 
 import (
+	"bufio"
+	"flag"
 	"fmt"
-	"log"
 	"os"
-	"runtime"
+	"path/filepath"
+	"strconv"
 	"strings"
-	"sync"
 )
 
-var findTypeChoose = 1 //defualt value is 1 是找后缀; 2是找文件名; 3找路径中含有关键字的路径
-
-func errFunc(info string, err error) bool {
-	if err != nil {
-		log.Println("info:", info, " error:", err)
-		return false
-	}
-	return true
+var flags struct {
+	searchPath string
+	searchString string
+	searchType string
+	exPath string
+	suffix string
 }
 
-func isSpecificFile(fileName string, speciType string) bool {
-	return strings.HasSuffix(fileName, speciType)
+func getUsage() {
+	flag.Usage()
+	fmt.Println("例如: yfind ")
 }
 
-func printSpecificFile(fileName string, speciType string) {
-	if isSpecificFile(fileName, speciType) {
-		fmt.Println("find: ", fileName)
-	}
-}
+const (
+	FILE_NAME = "fn"
+	FILE_CONTENT = "fc"
+)
 
-//如果目录路径最后没有分隔符则加上,
-//如果有则不加
-func checkHaveSeparatorInEnd(path string) string {
-	idxSperator := strings.LastIndex(path, "/")
-	if (idxSperator + 1) < len(path) {
-		path += "/"
-	}
-	return path
-}
+func check(fileName string) bool {
+	expArray := strings.Split(flags.exPath, ",")
 
-func openDir(path string) []os.FileInfo {
-	path = checkHaveSeparatorInEnd(path)
-	curPath, err := os.OpenFile(path, os.O_RDONLY, os.ModeDir)
-	if errFunc("opend dir error in openDir..", err) == false {
-		os.Exit(2)
+	if flags.exPath != "" {
+		for _, name := range expArray {
+			if strings.Contains(fileName, name) {
+				return true
+			}
+		}
 	}
 
-	dir1, err2 := curPath.Readdir(-1)
-	if !errFunc("read dir error in openDir..", err2) {
-		os.Exit(2)
-	}
-	curPath.Close()
-	return dir1
-}
-
-func findSpecificFile(path string, speciType string) {
-	dir1 := openDir(path)
-	for _, name := range dir1 {
-		if name.IsDir() {
-			findSpecificFile(path+name.Name()+"/", speciType)
+	if flags.suffix != "" {
+		if strings.Contains(fileName, flags.suffix) {
+			return false
 		} else {
-			printSpecificFile(path+name.Name(), speciType)
-		}
-	}
-	return
-}
-
-const SUF string = "-suf"   //找后缀
-const NAME string = "-name" //找文件
-
-func goFind(findPath string, findType string) {
-	maxProcs := runtime.NumCPU()
-
-	var wg sync.WaitGroup
-	dir1 := openDir(findPath)
-
-	dirCount := 0
-	for _, na := range dir1 {
-		if na.IsDir() {
-			dirCount++
+			return true
 		}
 	}
 
-	if dirCount > maxProcs {
-		runtime.GOMAXPROCS(maxProcs / 2)
-	} else {
-		runtime.GOMAXPROCS(1)
-	}
+	return false
+}
 
-	wg.Add(dirCount)
 
-	for _, name := range dir1 {
-		if name.IsDir() {
-			go func() {
-				defer wg.Done()
-				findTypeIsDirOption(findPath+"/"+name.Name()+"/", findType)
-			}()
-
-		} else {
-			findTypeIsFileOption(findPath+"/"+name.Name(), findType)
+func findContent(searchPath string, searchString string) {
+	fmt.Printf("Searching for '%s' in '%s'...\n\n", searchString, searchPath)
+	filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			fmt.Printf("Error accessing path '%s': %s\n", path, err)
+			return nil
 		}
-	}
-	wg.Wait()
+
+		if !info.IsDir() {
+			file, err := os.Open(path)
+			if err != nil {
+				fmt.Printf("Error opening file '%s': %s\n", path, err)
+				return nil
+			}
+			defer file.Close()
+			if check(file.Name()) {
+				return nil
+			}
+			scanner := bufio.NewScanner(file)
+			lineNum := 1
+			var tmpStr strings.Builder
+			tmpStr.WriteString("位置："+path+"\n")
+			for scanner.Scan() {
+				line := scanner.Text()
+				if strings.Contains(line, searchString) {
+					tmpStr.WriteString("\tLine["+strconv.Itoa(lineNum)+"]: "+line+"\n")
+				}
+				lineNum++
+			}
+			if strings.Contains(tmpStr.String(), "Line") {
+				fmt.Println(tmpStr.String())
+			}
+
+			if err := scanner.Err(); err != nil {
+				fmt.Printf("Error scanning file '%s': %s\n", path, err)
+			}
+		}
+
+		return nil
+	})
 }
 
-func findTypeIsDirOption(fileName string, speciType string) {
-	switch findTypeChoose {
-	case 1:
-		findSpecificFile(fileName, speciType)
-	case 2:
-		fmt.Println("no implementDir1")
-	case 3:
-		fmt.Println("no implementDir2")
-	}
+func findFileName(directory  string, searchTerm  string)  {
+	filepath.Walk(directory, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !info.IsDir() && (strings.Contains(info.Name(), searchTerm) || strings.HasSuffix(info.Name(), searchTerm)) {
+			fmt.Println(path)
+		}
+
+		return nil
+	})
 }
 
-func findTypeIsFileOption(fileName string, speciType string) {
-	switch findTypeChoose {
-	case 1:
-		printSpecificFile(fileName, speciType)
-	case 2:
-		fmt.Println("no implementFile1") //
-	case 3:
-		fmt.Println("no implementFile2") //
-	}
-}
-
-//args format
-//example:   findTools -suf .txt [path]
-//explain:  在(可选path或者默认当前工作路径)路径中找到后缀以 .txt结尾的文件
 func main() {
-	args := os.Args
-	var opt, findType, findPath string
-	if args == nil || len(args) < 3 || len(args) > 4 {
-		log.Println("args format error")
+	flag.StringVar(&flags.searchString, "k", "", "搜索内容")
+	flag.StringVar(&flags.searchPath, "p", "", "搜索路径")
+	flag.StringVar(&flags.searchType, "t", "", "搜索类型(fn-文件名称, fc-文件内容)")
+	flag.StringVar(&flags.searchType, "ex", "", "排除类型(如 target,.git等,使用 , 分隔)")
+	flag.StringVar(&flags.suffix, "sux", "", "后缀 .java,.c")
+	flag.Parse()
+
+	//flags.searchPath = "D:\\Project\\MyDemo\\"
+	//flags.searchString = "public static void main"
+	//flags.searchType = "fc"
+
+	if flags.searchType == "" || flags.searchPath == "" || flags.searchString =="" {
+		flag.Usage()
 		return
 	}
 
-	opt = args[1]      //获取选项
-	findType = args[2] //获取查找类型
-	//如果只有3个选项 那么查找路径默认为当前路径
-	if len(args) == 3 {
-		workDir, err := os.Getwd() //获取当前工作路径
-		if !errFunc("open wordir error in main", err) {
-			return
-		}
-		findPath = workDir
-	} else if len(args) == 4 {
-		findPath = args[3]
+	switch flags.searchType {
+	case FILE_NAME:
+		findFileName(flags.searchPath, flags.searchString)
+	case FILE_CONTENT:
+		findContent(flags.searchPath, flags.searchString)
 	}
-
-	switch opt {
-	case SUF:
-		{
-			goFind(findPath, findType)
-		}
-	case NAME:
-		log.Println("no implement the method")
-	default:
-		log.Println("no something to do!")
-	}
-
+	
 }
+
