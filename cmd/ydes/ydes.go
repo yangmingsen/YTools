@@ -1,128 +1,142 @@
 package main
 
 import (
-	"bytes"
+	"crypto/aes"
 	"crypto/cipher"
-	"crypto/des"
+	"crypto/rand"
+	"errors"
 	"flag"
 	"fmt"
-	"github.com/howeyc/gopass"
+	"io"
 	"io/ioutil"
+	"strings"
 )
 
-const KEY_SIZE int = 24
-
-func PKCS5Padding(ciphertext []byte, blockSize int) []byte {
-	padding := blockSize - len(ciphertext)%blockSize
-	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
-	return append(ciphertext, padtext...)
-}
-
-func PKCS5Unpadding(origData []byte) []byte {
-	length := len(origData)
-	unpadding := int(origData[length-1])
-	if length-unpadding <= 0 {
-		return make([]byte, 0)
-	} else {
-		return origData[:(length - unpadding)]
-	}
-
-}
-
-func Encrypt3(key, src []byte) []byte {
-
-	block, err := des.NewTripleDESCipher(key)
+func encryptFile(key []byte, filename string) error {
+	plaintext, err := ioutil.ReadFile(filename)
 	if err != nil {
-		panic(err)
+		return err
 	}
-	bs := block.BlockSize()
-	src = PKCS5Padding(src, bs)
-	blockMode := cipher.NewCBCEncrypter(block, key[:8])
 
-	dst := make([]byte, len(src))
-
-	blockMode.CryptBlocks(dst, src)
-	return dst
-}
-func Decrypt3(key, src []byte) []byte {
-
-	block, err := des.NewTripleDESCipher(key)
+	block, err := aes.NewCipher(key)
 	if err != nil {
-		panic(err)
+		return err
 	}
-	blockMode := cipher.NewCBCDecrypter(block, key[:8])
-	dst := make([]byte, len(src))
 
-	blockMode.CryptBlocks(dst, src)
-	dst = PKCS5Unpadding(dst)
-	return dst
+	ciphertext := make([]byte, aes.BlockSize+len(plaintext))
+	iv := ciphertext[:aes.BlockSize]
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return err
+	}
+
+	stream := cipher.NewCFBEncrypter(block, iv)
+	stream.XORKeyStream(ciphertext[aes.BlockSize:], plaintext)
+
+	return ioutil.WriteFile(filename+".encrypted", ciphertext, 0644)
 }
 
-func genKey3(key []byte) []byte {
-	kkey := make([]byte, 0, KEY_SIZE)
-	ede2Key := []byte(key)
-	length := len(ede2Key)
-	if length > KEY_SIZE {
-		kkey = append(kkey, ede2Key[:KEY_SIZE]...)
-	} else {
-		div := KEY_SIZE / length
-		mod := KEY_SIZE % length
-		for i := 0; i < div; i++ {
-			kkey = append(kkey, ede2Key...)
-		}
-		kkey = append(kkey, ede2Key[:mod]...)
+func decryptFile(key []byte, filename string) error {
+	ciphertext, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return err
 	}
-	return kkey
+
+	outPutName := strings.ReplaceAll(filename, ".encrypted", "")
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return err
+	}
+
+	if len(ciphertext) < aes.BlockSize {
+		return errors.New("ciphertext too short")
+	}
+	iv := ciphertext[:aes.BlockSize]
+	ciphertext = ciphertext[aes.BlockSize:]
+
+	stream := cipher.NewCFBDecrypter(block, iv)
+
+	plaintext := make([]byte, len(ciphertext))
+	stream.XORKeyStream(plaintext, ciphertext)
+
+	return ioutil.WriteFile(outPutName, plaintext, 0644)
+}
+
+var flags struct {
+	mode        string
+	key         string
+	fileName    string
+}
+
+func getUsage() {
+	flag.Usage()
+	fmt.Println("加密文件: ydes -m en -k 123 -file ./hello.txt")
+	fmt.Println("解密文件: ydes -m de -k 123 -file ./hello.txt.decrypted")
 }
 
 func main() {
-
-	t := flag.String("t", "<en/de>", "-t <en/de> 选择操作类型，加密还是解密")
-
-	file := flag.String("f", "filename", "-f <filename>")
-
-	isGenDectyptFile := flag.Bool("df", false, "-df 是否生成解密")
-
+	flag.StringVar(&flags.mode, "m","","模式")
+	flag.StringVar(&flags.key, "k","","秘钥（加密==解密）")
+	flag.StringVar(&flags.fileName, "file","","加密文件")
 	flag.Parse()
 
-	if *t == "en" {
-
-		for i := 0; i < 3; i++ {
-			fmt.Print("请输入密钥： ")
-			pwd1, _ := gopass.GetPasswdMasked()
-			fmt.Print("请重复输入密钥： ")
-			pwd2, _ := gopass.GetPasswdMasked()
-			if !bytes.Equal(pwd1, pwd2) {
-				fmt.Println("两次输入的密钥不匹配，请重新输入！")
-			} else {
-				key := genKey3(pwd1)
-				info, _ := ioutil.ReadFile(*file)
-				dst := Encrypt3(key, info)
-				ioutil.WriteFile(*file+"_enctypted", dst, 0666)
-				fmt.Println("已生成加密文件" + *file + "_enctypted，请妥善保管您的密钥！")
-				break
-			}
+	var command string
+	check := true
+	if flags.mode != "" {
+		if flags.mode == "en" {
+			command = "encrypt"
+		} else if flags.mode == "de" {
+			command = "decrypt"
+		} else {
+			fmt.Println("错误模式：",flags.mode)
+			check = false
 		}
+	} else {
+		fmt.Println("模式不能为空")
+		check = false
+	}
 
-	} else if *t == "de" {
-		for i := 0; i < 3; i++ {
-			fmt.Print("请输入密钥： ")
-			pwd, _ := gopass.GetPasswdMasked() // Masked gopass.getPasswd
-			key := genKey3(pwd)
-			info, _ := ioutil.ReadFile(*file)
-			src := Decrypt3(key, info)
-			if len(src) == 0 {
-				fmt.Println("密钥不对，请重新输入！")
-			} else {
-				fmt.Println(string(src))
-				if *isGenDectyptFile {
-					ioutil.WriteFile(*file+"_dectypted", src, 0666)
-					fmt.Println("已生成解密文件" + *file + "_dectypted，请妥善保管！")
-				}
-				break
+	if flags.key == "" {
+		fmt.Println("key不能为空")
+		check = false
+	} else {
+		if len(flags.key) < 16 {
+			for kLen := len(flags.key); kLen <16; kLen++ {
+				flags.key = flags.key+"0"
 			}
-
+			fmt.Println("new Key: ", flags.key)
 		}
+	}
 
+	if flags.fileName == "" {
+		fmt.Println("加密文件不能为空")
+		check = false
+	}
+
+	if !check {
+		getUsage()
+		return
+	} else {
+		fmt.Println(flags)
+	}
+
+	key := []byte(flags.key)
+	filename := flags.fileName
+
+	switch command {
+	case "encrypt":
+		if err := encryptFile(key, filename); err != nil {
+			fmt.Println("Error encrypting file:", err)
+			return
+		}
+		fmt.Println("File encrypted successfully.")
+	case "decrypt":
+		if err := decryptFile(key, filename); err != nil {
+			fmt.Println("Error decrypting file:", err)
+			return
+		}
+		fmt.Println("File decrypted successfully.")
+	default:
+		fmt.Println("Invalid command:", command)
 	}
 }
