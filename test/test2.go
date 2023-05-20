@@ -4,8 +4,8 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"fmt"
 	"io"
-	"log"
 	"os"
 )
 
@@ -121,24 +121,43 @@ func decryptFile(filename string, key []byte) error {
 	return nil
 }
 
+func isBinaryFile(filePath string) bool {
+	file, err := os.Open(filePath)
+	if err != nil {
+		fmt.Println("无法打开文件:", err)
+		return false
+	}
+	defer file.Close()
+
+	buffer := make([]byte, 512) // 读取文件的前512个字节
+
+	n, err := file.Read(buffer)
+	if err != nil && err != io.EOF {
+		fmt.Println("无法读取文件:", err)
+		return false
+	}
+
+	for i := 0; i < n; i++ {
+		if buffer[i] == 0 {
+			return true // 发现二进制数据，判断为二进制文件
+		}
+	}
+
+	return false // 未发现二进制数据，判断为文本文件
+}
+
 func main() {
-	// 32字节的密钥（256位）
-	key := []byte("0123456789123456")
 
 	// 要加密的文件
-	filename := "G:\\tmp\\DG5461432_x64-22.zip"
+	//filename := "G:\\tmp\\DG5461432_x64.zip"
+	filename := "G:\\Project\\Java\\other\\MyDemoCode\\src\\main\\java\\top\\yms\\recent\\c202209\\Code16.java"
 
-	// 加密文件
-	//err := encryptFile(filename, key)
-	//if err != nil {
-	//	log.Fatal("加密文件失败:", err)
-	//}
-	//log.Println("加密文件成功")
+	isBinary := isBinaryFile(filename)
 
-	// 解密文件
-	err := decryptFile(filename+".encrypted", key)
-	if err != nil {
-		log.Fatal("解密文件失败:", err)
+	if isBinary {
+		fmt.Println("文件是二进制文件")
+	} else {
+		fmt.Println("文件是文本文件")
 	}
-	log.Println("解密文件成功")
+
 }

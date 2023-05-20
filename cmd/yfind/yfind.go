@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,34 +12,70 @@ import (
 )
 
 var flags struct {
-	searchPath string
+	searchPath   string
 	searchString string
-	searchType string
-	exPath string
-	suffix string
+	searchType   string
+	//排除搜索（含路径，文件名称）
+	exSearch string
+	suffix   string
 }
 
 func getUsage() {
 	flag.Usage()
-	fmt.Println("例如: yfind ")
+	fmt.Println("例如: yfind -t 搜索类型 -k 搜索内容 -p 搜索路径")
+	fmt.Println("注意：yfind默认会排除二进制文件搜索...")
 }
 
 const (
-	FILE_NAME = "fn"
+	FILE_NAME    = "fn"
 	FILE_CONTENT = "fc"
 )
 
-func check(fileName string) bool {
-	expArray := strings.Split(flags.exPath, ",")
+//判断当前文件 是否是二进制 文件
+//true => 是 ; false => 否
+func isBinaryFile(filePath string) bool {
+	file, err := os.Open(filePath)
+	if err != nil {
+		fmt.Println("无法打开文件:", err)
+		return false
+	}
+	defer file.Close()
 
-	if flags.exPath != "" {
+	buffer := make([]byte, 512) // 读取文件的前512个字节
+
+	n, err := file.Read(buffer)
+	if err != nil && err != io.EOF {
+		fmt.Println("无法读取文件:", err)
+		return false
+	}
+
+	for i := 0; i < n; i++ {
+		if buffer[i] == 0 {
+			return true // 发现二进制数据，判断为二进制文件
+		}
+	}
+
+	return false // 未发现二进制数据，判断为文本文件
+}
+
+func check(fileName string) bool {
+	//二进制文件排除
+	if isBinaryFile(fileName) {
+		return true
+	}
+
+	//文件路径，文件名称 排除
+	expArray := strings.Split(flags.exSearch, ",")
+	if flags.exSearch != "" {
 		for _, name := range expArray {
+
 			if strings.Contains(fileName, name) {
 				return true
 			}
 		}
 	}
 
+	//后缀排除检查
 	if flags.suffix != "" {
 		if strings.Contains(fileName, flags.suffix) {
 			return false
@@ -49,7 +86,6 @@ func check(fileName string) bool {
 
 	return false
 }
-
 
 func findContent(searchPath string, searchString string) {
 	fmt.Printf("Searching for '%s' in '%s'...\n\n", searchString, searchPath)
@@ -72,11 +108,11 @@ func findContent(searchPath string, searchString string) {
 			scanner := bufio.NewScanner(file)
 			lineNum := 1
 			var tmpStr strings.Builder
-			tmpStr.WriteString("位置："+path+"\n")
+			tmpStr.WriteString("位置：" + path + "\n")
 			for scanner.Scan() {
 				line := scanner.Text()
 				if strings.Contains(line, searchString) {
-					tmpStr.WriteString("\tLine["+strconv.Itoa(lineNum)+"]: "+line+"\n")
+					tmpStr.WriteString("\tLine[" + strconv.Itoa(lineNum) + "]: " + line + "\n")
 				}
 				lineNum++
 			}
@@ -93,7 +129,7 @@ func findContent(searchPath string, searchString string) {
 	})
 }
 
-func findFileName(directory  string, searchTerm  string)  {
+func findFileName(directory string, searchTerm string) {
 	filepath.Walk(directory, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -111,16 +147,16 @@ func main() {
 	flag.StringVar(&flags.searchString, "k", "", "搜索内容")
 	flag.StringVar(&flags.searchPath, "p", "", "搜索路径")
 	flag.StringVar(&flags.searchType, "t", "", "搜索类型(fn-文件名称, fc-文件内容)")
-	flag.StringVar(&flags.searchType, "ex", "", "排除类型(如 target,.git等,使用 , 分隔)")
+	flag.StringVar(&flags.exSearch, "ex", "", "排除类型(如 target,.git等,使用 , 分隔)")
 	flag.StringVar(&flags.suffix, "sux", "", "后缀 .java,.c")
 	flag.Parse()
 
-	//flags.searchPath = "D:\\Project\\MyDemo\\"
+	//flags.searchPath = "G:\\Project\\Java\\other\\MyDemoCode"
 	//flags.searchString = "public static void main"
 	//flags.searchType = "fc"
 
-	if flags.searchType == "" || flags.searchPath == "" || flags.searchString =="" {
-		flag.Usage()
+	if flags.searchType == "" || flags.searchPath == "" || flags.searchString == "" {
+		getUsage()
 		return
 	}
 
@@ -130,6 +166,5 @@ func main() {
 	case FILE_CONTENT:
 		findContent(flags.searchPath, flags.searchString)
 	}
-	
-}
 
+}

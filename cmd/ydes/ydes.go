@@ -194,6 +194,9 @@ func getUsage() {
 
 func decrypt(key string, fileName string) error {
 	stat, err := os.Stat(fileName)
+	if stat.IsDir() {
+		panic("加密文件不能是目录")
+	}
 	if err != nil {
 		return err
 	}
@@ -216,6 +219,9 @@ func decrypt(key string, fileName string) error {
 
 func encrypt(key string, fileName string) error {
 	stat, err := os.Stat(fileName)
+	if stat.IsDir() {
+		panic("加密文件不能是目录")
+	}
 	if err != nil {
 		return err
 	}
@@ -242,6 +248,10 @@ func main() {
 	flag.StringVar(&flags.fileName, "file", "", "加密文件")
 	flag.Parse()
 
+	//flags.mode = "en"
+	//flags.key = "123"
+	//flags.fileName = "G:\\tmp"
+
 	var command string
 	check := true
 	if flags.mode != "" {
@@ -267,7 +277,6 @@ func main() {
 			for kLen := len(flags.key); kLen < keySize; kLen++ {
 				flags.key = flags.key + "0"
 			}
-			fmt.Println("new Key: ", flags.key)
 		} else if len(flags.key) > keySize {
 			flags.key = flags.key[0:keySize]
 		}
@@ -282,7 +291,7 @@ func main() {
 		getUsage()
 		return
 	} else {
-		fmt.Println(flags)
+		//fmt.Println(flags)
 	}
 
 	key := flags.key
