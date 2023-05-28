@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,15 +15,15 @@ import (
 )
 
 const (
-	//key加密长度
+	//key加密长度 // 128bit
 	keySize = 16
 
-	//100M => 使用100M作为大文件加密界限
-	s100M = 50 * 1024 * 1024
+	//50M => 使用50M作为大文件加密界限
+	s50M = 50 * 1024 * 1024
 )
 
 func encryptBigFile(filename string, key []byte) error {
-	fmt.Println("bigSize file encrypt begin....")
+	fmt.Println("bigSize file doEncryptFile begin....")
 	// 打开原始文件
 	originalFile, err := os.Open(filename)
 	if err != nil {
@@ -79,7 +80,7 @@ func encryptBigFile(filename string, key []byte) error {
 }
 
 func decryptBigFile(filename string, key []byte) error {
-	fmt.Println("bigSize file decrypt begin....")
+	fmt.Println("bigSize file doDecryptFile begin....")
 	// 打开加密文件
 	encryptedFile, err := os.Open(filename)
 	if err != nil {
@@ -180,19 +181,61 @@ func decryptFile(key []byte, filename string) error {
 	return ioutil.WriteFile(outPutName, plaintext, 0644)
 }
 
+//加密字符串
+func encryptText(key []byte, plaintext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	ciphertext := make([]byte, aes.BlockSize+len(plaintext))
+	iv := ciphertext[:aes.BlockSize]
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return nil, err
+	}
+
+	stream := cipher.NewCFBEncrypter(block, iv)
+	stream.XORKeyStream(ciphertext[aes.BlockSize:], plaintext)
+
+	return ciphertext, nil
+}
+
+//解密字符串
+func decryptText(key []byte, ciphertext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(ciphertext) < aes.BlockSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+
+	iv := ciphertext[:aes.BlockSize]
+	ciphertext = ciphertext[aes.BlockSize:]
+
+	stream := cipher.NewCFBDecrypter(block, iv)
+	stream.XORKeyStream(ciphertext, ciphertext)
+
+	return ciphertext, nil
+}
+
 var flags struct {
 	mode     string
 	key      string
 	fileName string
+	data     string
 }
 
 func getUsage() {
 	flag.Usage()
-	fmt.Println("加密文件: ydes -m en -k 123 -file ./hello.txt")
-	fmt.Println("解密文件: ydes -m de -k 123 -file ./hello.txt.decrypted")
+	fmt.Println("加密文件: ydes -m en -k 秘钥 -file ./hello.txt")
+	fmt.Println("解密文件: ydes -m de -k 秘钥 -file ./hello.txt.decrypted")
+	fmt.Println("解密字符: ydes -m en -k 秘钥 -data 明文")
+	fmt.Println("解密字符: ydes -m de -k 秘钥 -data 密文")
 }
 
-func decrypt(key string, fileName string) error {
+func doDecryptFile(key string, fileName string) error {
 	stat, err := os.Stat(fileName)
 	if stat.IsDir() {
 		panic("加密文件不能是目录")
@@ -202,7 +245,7 @@ func decrypt(key string, fileName string) error {
 	}
 
 	fileSize := stat.Size()
-	if fileSize > int64(s100M) {
+	if fileSize > int64(s50M) {
 		err := decryptBigFile(fileName, []byte(key))
 		if err != nil {
 			return err
@@ -217,7 +260,7 @@ func decrypt(key string, fileName string) error {
 	return nil
 }
 
-func encrypt(key string, fileName string) error {
+func doEncryptFile(key string, fileName string) error {
 	stat, err := os.Stat(fileName)
 	if stat.IsDir() {
 		panic("加密文件不能是目录")
@@ -227,7 +270,7 @@ func encrypt(key string, fileName string) error {
 	}
 
 	fileSize := stat.Size()
-	if fileSize > int64(s100M) {
+	if fileSize > int64(s50M) {
 		err := encryptBigFile(fileName, []byte(key))
 		if err != nil {
 			return err
@@ -245,15 +288,18 @@ func encrypt(key string, fileName string) error {
 func main() {
 	flag.StringVar(&flags.mode, "m", "", "模式")
 	flag.StringVar(&flags.key, "k", "", "秘钥（加密==解密）")
-	flag.StringVar(&flags.fileName, "file", "", "加密文件")
+	flag.StringVar(&flags.fileName, "file", "", "加解密文件")
+	flag.StringVar(&flags.data, "data", "", "加解密数据")
 	flag.Parse()
 
-	//flags.mode = "en"
+	//flags.mode = "de"
 	//flags.key = "123"
 	//flags.fileName = "G:\\tmp"
+	//flags.data = "bdC6IQA/ygjDpYJ6WrHjLSZrSo7J2aDackOx"
 
 	var command string
 	check := true
+	//校验模式不能为空
 	if flags.mode != "" {
 		if flags.mode == "en" {
 			command = "encrypt"
@@ -268,6 +314,7 @@ func main() {
 		check = false
 	}
 
+	//校验加密key不能为空
 	if flags.key == "" {
 		fmt.Println("key不能为空")
 		check = false
@@ -282,8 +329,25 @@ func main() {
 		}
 	}
 
-	if flags.fileName == "" {
-		fmt.Println("加密文件不能为空")
+	//是否 存在加密数据
+	isExsitData := false
+
+	//是否存在文件数据
+	isFile := false
+	if flags.fileName != "" {
+		isFile = true
+		isExsitData = true
+	}
+
+	//是否存在加密数据
+	isData := false
+	if flags.data != "" {
+		isData = true
+		isExsitData = true
+	}
+
+	if isExsitData == false {
+		fmt.Println("加密数据不能为空")
 		check = false
 	}
 
@@ -299,17 +363,53 @@ func main() {
 
 	switch command {
 	case "encrypt":
-		if err := encrypt(key, filename); err != nil {
-			fmt.Println("Error encrypting file:", err)
-			return
+		{
+			if isFile {
+				//文件加密
+				if err := doEncryptFile(key, filename); err != nil {
+					fmt.Println("Error encrypting file:", err)
+					return
+				}
+				fmt.Println("File encrypted successfully.")
+			} else if isData {
+				// 加密
+				ciphertext, err := encryptText([]byte(key), []byte(flags.data))
+				if err != nil {
+					fmt.Println("Encryption Text error:", err)
+					return
+				}
+
+				fmt.Println("Ciphertext:", base64.StdEncoding.EncodeToString(ciphertext))
+			}
+
 		}
-		fmt.Println("File encrypted successfully.")
+
 	case "decrypt":
-		if err := decrypt(key, filename); err != nil {
-			fmt.Println("Error decrypting file:", err)
-			return
+		{
+			if isFile {
+				if err := doDecryptFile(key, filename); err != nil {
+					fmt.Println("Error decrypting file:", err)
+					return
+				}
+				fmt.Println("File decrypted successfully.")
+			}
+
+			if isData {
+				// 解密
+				decodeString, deErr := base64.StdEncoding.DecodeString(flags.data)
+				if deErr != nil {
+					fmt.Println("base64 decode data err:", deErr)
+				}
+				decryptedText, err := decryptText([]byte(key), decodeString)
+				if err != nil {
+					fmt.Println("Decryption Text error:", err)
+					return
+				}
+
+				fmt.Println("Decrypted text: ", string(decryptedText))
+			}
 		}
-		fmt.Println("File decrypted successfully.")
+
 	default:
 		fmt.Println("Invalid command:", command)
 	}
