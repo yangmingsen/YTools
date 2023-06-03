@@ -121,6 +121,17 @@ func decryptFile(filename string, key []byte) error {
 	return nil
 }
 
+func isBinaryData(data []byte) bool {
+	n := len(data)
+	for i := 0; i < n; i++ {
+		if data[i] == 0 {
+			return true // 发现二进制数据，判断为二进制文件
+		}
+	}
+
+	return false // 未发现二进制数据，判断为文本文件
+}
+
 func isBinaryFile(filePath string) bool {
 	file, err := os.Open(filePath)
 	if err != nil {

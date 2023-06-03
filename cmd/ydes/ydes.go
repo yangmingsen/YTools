@@ -154,14 +154,27 @@ func encryptFile(key []byte, filename string) error {
 	return ioutil.WriteFile(filename+".encrypted", ciphertext, 0644)
 }
 
+func isBinaryData(data []byte) bool {
+	n := len(data)
+	if n > 512 {
+		n = 512
+	}
+	for i := 0; i < n; i++ {
+		if data[i] == 0 {
+			return true // 发现二进制数据，判断为二进制文件
+		}
+	}
+
+	return false // 未发现二进制数据，判断为文本文件
+}
+
 func decryptFile(key []byte, filename string) error {
 	ciphertext, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return err
 	}
-
+	//输出文件名称
 	outPutName := strings.ReplaceAll(filename, ".encrypted", "")
-
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return err
@@ -177,8 +190,12 @@ func decryptFile(key []byte, filename string) error {
 
 	plaintext := make([]byte, len(ciphertext))
 	stream.XORKeyStream(plaintext, ciphertext)
-
-	return ioutil.WriteFile(outPutName, plaintext, 0644)
+	if flags.show && !isBinaryData(plaintext) {
+		fmt.Println(string(plaintext))
+		return nil
+	} else {
+		return ioutil.WriteFile(outPutName, plaintext, 0644)
+	}
 }
 
 //加密字符串
@@ -225,12 +242,14 @@ var flags struct {
 	key      string
 	fileName string
 	data     string
+	show     bool
 }
 
 func getUsage() {
 	flag.Usage()
 	fmt.Println("加密文件: ydes -m en -k 秘钥 -file ./hello.txt")
 	fmt.Println("解密文件: ydes -m de -k 秘钥 -file ./hello.txt.decrypted")
+	fmt.Println("解密文件: ydes -m de -k 秘钥 -file ./hello.txt.decrypted -show 任何值")
 	fmt.Println("解密字符: ydes -m en -k 秘钥 -data 明文")
 	fmt.Println("解密字符: ydes -m de -k 秘钥 -data 密文")
 }
@@ -290,11 +309,13 @@ func main() {
 	flag.StringVar(&flags.key, "k", "", "秘钥（加密==解密）")
 	flag.StringVar(&flags.fileName, "file", "", "加解密文件")
 	flag.StringVar(&flags.data, "data", "", "加解密数据")
+	flag.BoolVar(&flags.show, "show", false, "是否只展示不输出到文件(只合适小文本文件)")
 	flag.Parse()
 
 	//flags.mode = "de"
-	//flags.key = "123"
-	//flags.fileName = "G:\\tmp"
+	//flags.key = "yangmingsen"
+	//flags.fileName = "G:\\2023_Data\\fpy-rr.txt.encrypted"
+	//flags.show = true
 	//flags.data = "bdC6IQA/ygjDpYJ6WrHjLSZrSo7J2aDackOx"
 
 	var command string
@@ -370,7 +391,7 @@ func main() {
 					fmt.Println("Error encrypting file:", err)
 					return
 				}
-				fmt.Println("File encrypted successfully.")
+				//fmt.Println("File encrypted successfully.")
 			} else if isData {
 				// 加密
 				ciphertext, err := encryptText([]byte(key), []byte(flags.data))
@@ -391,7 +412,7 @@ func main() {
 					fmt.Println("Error decrypting file:", err)
 					return
 				}
-				fmt.Println("File decrypted successfully.")
+				//fmt.Println("File decrypted successfully.")
 			}
 
 			if isData {
