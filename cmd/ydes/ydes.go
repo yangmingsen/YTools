@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"io/ioutil"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,7 +27,7 @@ const (
 )
 
 func encryptBigFile(filename string, key []byte) error {
-	fmt.Println("bigSize file doEncryptFileCheck begin....")
+	logf("bigSize file doEncryptFileCheck begin....")
 	// 打开原始文件
 	originalFile, err := os.Open(filename)
 	if err != nil {
@@ -92,7 +93,7 @@ func encryptBigFile(filename string, key []byte) error {
 }
 
 func decryptBigFile(filename string, key []byte) error {
-	fmt.Println("bigSize file doDecryptFile begin....")
+	logf("bigSize file doDecryptFile begin....")
 	// 打开加密文件
 	encryptedFile, err := os.Open(filename)
 	if err != nil {
@@ -282,6 +283,7 @@ var flags struct {
 	data     string
 	show     bool
 	delSrc   bool
+	debug   bool
 }
 
 func getUsage() {
@@ -417,7 +419,6 @@ func dirCheck(mode, key, fileName string) error {
 				}
 			}
 			return nil
-
 		})
 		if fwErr != nil {
 			return fwErr
@@ -444,6 +445,7 @@ func doDecryptFileCheck(key, fileName string) error {
 
 func doEncryptFileCheck(key string, fileName string) error {
 	stat, err := os.Stat(fileName)
+	logf("statInfo: ", stat)
 	if err != nil {
 		return err
 	}
@@ -455,6 +457,12 @@ func doEncryptFileCheck(key string, fileName string) error {
 
 }
 
+var logger = log.New(os.Stderr, "", log.Lshortfile|log.LstdFlags)
+func logf(f string, v ...interface{}) {
+	if flags.debug {
+		logger.Output(2, fmt.Sprintf(f, v...))
+	}
+}
 
 func main() {
 	flag.StringVar(&flags.mode, "m", "", "模式(en/de)")
@@ -463,14 +471,18 @@ func main() {
 	flag.StringVar(&flags.data, "data", "", "加解密数据")
 	flag.BoolVar(&flags.show, "show", false, "只展示不输出到文件(只合适小文本文件)")
 	flag.BoolVar(&flags.delSrc, "dsrc", false, "删除源文件")
+	flag.BoolVar(&flags.debug, "debug", false, "debug mode")
 	flag.Parse()
 
 	//flags.mode = "de"
 	//flags.key = "yangmingsen"
 	//flags.fileName = "E:\\tempFiles\\demo-api"
 	//flags.delSrc = true
+	//flags.debug = true
 	//flags.show = true
 	//flags.data = "bdC6IQA/ygjDpYJ6WrHjLSZrSo7J2aDackOx"
+
+	logf("输入参数：", flags)
 
 	var command string
 	check := true
@@ -481,17 +493,17 @@ func main() {
 		} else if flags.mode == "de" {
 			command = "decrypt"
 		} else {
-			fmt.Println("错误模式：", flags.mode)
+			logf("错误模式：", flags.mode)
 			check = false
 		}
 	} else {
-		fmt.Println("模式不能为空")
+		logf("模式不能为空")
 		check = false
 	}
 
 	//校验加密key不能为空
 	if flags.key == "" {
-		fmt.Println("key不能为空")
+		logf("key不能为空")
 		check = false
 	} else {
 		//加密key修改
@@ -522,7 +534,7 @@ func main() {
 	}
 
 	if isExsitData == false {
-		fmt.Println("加密数据不能为空")
+		logf("加密数据不能为空")
 		check = false
 	}
 
@@ -535,6 +547,11 @@ func main() {
 
 	key := flags.key
 	filename := flags.fileName
+	logf("key: ", key)
+	logf("fileName: ", filename)
+	logf("isFile: ", isFile)
+	logf("isData: ", isData)
+
 
 	switch command {
 	case "encrypt":
@@ -545,8 +562,8 @@ func main() {
 					fmt.Println("Error encrypting file:", err)
 					return
 				}
-				//fmt.Println("File encrypted successfully.")
 			} else if isData {
+				logf("isData =>data => : ", flags.data)
 				// 加密
 				ciphertext, err := encryptText([]byte(key), []byte(flags.data))
 				if err != nil {
@@ -566,7 +583,7 @@ func main() {
 					fmt.Println("Error decrypting file:", err)
 					return
 				}
-				//fmt.Println("File decrypted successfully.")
+				logf("File decrypted successfully.")
 			}
 
 			if isData {
@@ -581,7 +598,7 @@ func main() {
 					return
 				}
 
-				fmt.Println("Decrypted text: ", string(decryptedText))
+				fmt.Println("Decrypted text: \n", string(decryptedText))
 			}
 		}
 
