@@ -22,6 +22,11 @@ const (
 	//key加密长度 // 128bit
 	keySize = 16
 
+	//ept文件后缀
+	YEPT = ".yept"
+	//不再使用该后缀名 废弃于20230614,使用YEPT, 这里做兼容
+	EPT = ".encrypted"
+
 	//50M => 使用50M作为大文件加密界限
 	s50M = 50 * 1024 * 1024
 )
@@ -38,7 +43,7 @@ func encryptBigFile(filename string, key []byte) error {
 		os.Remove(filename)
 	}()
 
-	eptName := filename + ".encrypted"
+	eptName := getEptNewFileName(filename)
 	_, cerr := os.Stat(eptName)
 	if cerr == nil { //删除即将创建的文件
 		os.Remove(eptName)
@@ -101,7 +106,7 @@ func decryptBigFile(filename string, key []byte) error {
 	}
 	defer encryptedFile.Close()
 
-	dptName := strings.ReplaceAll(filename, ".encrypted", "")
+	dptName := getDeptNewFileName(filename)
 	_, cerr := os.Stat(dptName)
 	if cerr == nil { //删除即将创建的文件
 		os.Remove(dptName)
@@ -169,7 +174,7 @@ func encryptFile(key []byte, filename string) error {
 	stream := cipher.NewCFBEncrypter(block, iv)
 	stream.XORKeyStream(ciphertext[aes.BlockSize:], plaintext)
 
-	cFileName := filename+".encrypted"
+	cFileName := getEptNewFileName(filename)
 	_, cErr := os.Stat(cFileName)
 	if cErr == nil {
 		os.Remove(cFileName)
@@ -197,13 +202,29 @@ func isBinaryData(data []byte) bool {
 	return false // 未发现二进制数据，判断为文本文件
 }
 
+//获取解密文件名
+func getDeptNewFileName(fileName string) string {
+	if containsAny(fileName, EPT, YEPT) {
+		fileName = strings.ReplaceAll(fileName, YEPT, "")
+		fileName = strings.ReplaceAll(fileName, EPT, "")
+	}
+
+	return fileName
+}
+
+//获取加密文件名
+func getEptNewFileName(fileName string) string {
+	return fileName+YEPT
+}
+
+//解密文件数据实际实现
 func decryptFile(key []byte, filename string) error {
 	ciphertext, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return err
 	}
 	//输出文件名称
-	outPutName := strings.ReplaceAll(filename, ".encrypted", "")
+	outPutName := getDeptNewFileName(filename)
 	_, err1 := os.Stat(outPutName)
 	if err1 == nil {
 		os.Remove(outPutName)
@@ -295,9 +316,20 @@ func getUsage() {
 	fmt.Println("解密字符: ydes -m de -k 秘钥 -data 密文")
 }
 
+//is one of method
+func containsAny(key string, any ...string) bool {
+	for i := range any {
+		if strings.Contains(key, any[i]) {
+			return true
+		}
+	}
 
+	return false
+}
+
+//解密文件判断方法之一，这个地方判断是否进行大文件加密
 func doDecryptFile(key string, fileName string) error {
-	if !strings.Contains(fileName, ".encrypted") {
+	if !containsAny(fileName, YEPT, EPT){
 		return errors.New("非解密文件...("+fileName+")")
 	}
 	stat, err := os.Stat(fileName)
@@ -346,9 +378,9 @@ func getUserInput(reader *bufio.Reader, tip string) (string, bool) {
 
 
 const authKey = "eWFuZ21pbmdzZW4="
-
+//加密文件判断方法之一，这个地方判断是否进行大文件加密
 func doEncryptFile(key, fileName string) error {
-	if strings.Contains(fileName, ".encrypted") {
+	if containsAny(fileName, YEPT, EPT) {
 		return errors.New("当前文件已为加密文件,不可再加密...("+fileName+")")
 	}
 	stat, err := os.Stat(fileName)
@@ -376,6 +408,7 @@ func doEncryptFile(key, fileName string) error {
 	return nil
 }
 
+//对于目录进行警告信息
 func dirCheck(mode, key, fileName string) error {
 	fmt.Println("警告：目录加密/解密具备风险性,请确认是否继续....")
 	reader := bufio.NewReader(os.Stdin)
@@ -431,6 +464,7 @@ func dirCheck(mode, key, fileName string) error {
 	return nil
 }
 
+//解密文件时判断，如是否是目录情况
 func doDecryptFileCheck(key, fileName string) error {
 	stat, err := os.Stat(fileName)
 	if err != nil {
@@ -443,6 +477,7 @@ func doDecryptFileCheck(key, fileName string) error {
 	}
 }
 
+//加密文件时判断，如是否是目录情况
 func doEncryptFileCheck(key string, fileName string) error {
 	stat, err := os.Stat(fileName)
 	logf("statInfo: ", stat)
