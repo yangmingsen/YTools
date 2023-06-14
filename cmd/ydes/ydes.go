@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -9,8 +10,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -23,16 +26,25 @@ const (
 )
 
 func encryptBigFile(filename string, key []byte) error {
-	fmt.Println("bigSize file doEncryptFile begin....")
+	fmt.Println("bigSize file doEncryptFileCheck begin....")
 	// 打开原始文件
 	originalFile, err := os.Open(filename)
 	if err != nil {
 		return err
 	}
-	defer originalFile.Close()
+	defer func() {
+		originalFile.Close()
+		os.Remove(filename)
+	}()
+
+	eptName := filename + ".encrypted"
+	_, cerr := os.Stat(eptName)
+	if cerr == nil { //删除即将创建的文件
+		os.Remove(eptName)
+	}
 
 	// 创建加密文件
-	encryptedFile, err := os.Create(filename + ".encrypted")
+	encryptedFile, err := os.Create(eptName)
 	if err != nil {
 		return err
 	}
@@ -88,8 +100,13 @@ func decryptBigFile(filename string, key []byte) error {
 	}
 	defer encryptedFile.Close()
 
+	dptName := strings.ReplaceAll(filename, ".encrypted", "")
+	_, cerr := os.Stat(dptName)
+	if cerr == nil { //删除即将创建的文件
+		os.Remove(dptName)
+	}
 	// 创建解密文件
-	decryptedFile, err := os.Create(filename + ".decrypted")
+	decryptedFile, err := os.Create(dptName)
 	if err != nil {
 		return err
 	}
@@ -151,7 +168,18 @@ func encryptFile(key []byte, filename string) error {
 	stream := cipher.NewCFBEncrypter(block, iv)
 	stream.XORKeyStream(ciphertext[aes.BlockSize:], plaintext)
 
-	return ioutil.WriteFile(filename+".encrypted", ciphertext, 0644)
+	cFileName := filename+".encrypted"
+	_, cErr := os.Stat(cFileName)
+	if cErr == nil {
+		os.Remove(cFileName)
+	}
+
+	err = ioutil.WriteFile(cFileName, ciphertext, 0644)
+	if err != nil {
+		return err
+	} else {
+		return nil
+	}
 }
 
 func isBinaryData(data []byte) bool {
@@ -175,6 +203,11 @@ func decryptFile(key []byte, filename string) error {
 	}
 	//输出文件名称
 	outPutName := strings.ReplaceAll(filename, ".encrypted", "")
+	_, err1 := os.Stat(outPutName)
+	if err1 == nil {
+		os.Remove(outPutName)
+	}
+
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return err
@@ -194,7 +227,12 @@ func decryptFile(key []byte, filename string) error {
 		fmt.Println(string(plaintext))
 		return nil
 	} else {
-		return ioutil.WriteFile(outPutName, plaintext, 0644)
+		err =  ioutil.WriteFile(outPutName, plaintext, 0644)
+		if err != nil {
+			return err
+		} else {
+			return nil;
+		}
 	}
 }
 
@@ -243,22 +281,24 @@ var flags struct {
 	fileName string
 	data     string
 	show     bool
+	delSrc   bool
 }
 
 func getUsage() {
 	flag.Usage()
 	fmt.Println("加密文件: ydes -m en -k 秘钥 -file ./hello.txt")
-	fmt.Println("解密文件: ydes -m de -k 秘钥 -file ./hello.txt.decrypted")
+	fmt.Println("解密文件: ydes -m de -k 秘钥 -file ./hello.txt.decrypted -dsrc 任何指")
 	fmt.Println("解密文件: ydes -m de -k 秘钥 -file ./hello.txt.decrypted -show 任何值")
 	fmt.Println("解密字符: ydes -m en -k 秘钥 -data 明文")
 	fmt.Println("解密字符: ydes -m de -k 秘钥 -data 密文")
 }
 
+
 func doDecryptFile(key string, fileName string) error {
-	stat, err := os.Stat(fileName)
-	if stat.IsDir() {
-		panic("加密文件不能是目录")
+	if !strings.Contains(fileName, ".encrypted") {
+		return errors.New("非解密文件...("+fileName+")")
 	}
+	stat, err := os.Stat(fileName)
 	if err != nil {
 		return err
 	}
@@ -276,14 +316,40 @@ func doDecryptFile(key string, fileName string) error {
 		}
 	}
 
+	if flags.delSrc {
+		//删除旧文件
+		os.Remove(fileName)
+	}
+
 	return nil
 }
 
-func doEncryptFile(key string, fileName string) error {
-	stat, err := os.Stat(fileName)
-	if stat.IsDir() {
-		panic("加密文件不能是目录")
+//读取用户输入的命令
+func getUserInput(reader *bufio.Reader, tip string) (string, bool) {
+	// 读取用户输入的命令
+	fmt.Print("[",tip,"]$ ")
+	command, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Println("获取输入命令出错: ", err)
+		return "", false
 	}
+	command = strings.TrimSpace(command)
+	if command == "" && len(command) == 0 {
+		//空字符情况处理
+		return "", false
+	}
+
+	return command, true
+}
+
+
+const authKey = "eWFuZ21pbmdzZW4="
+
+func doEncryptFile(key, fileName string) error {
+	if strings.Contains(fileName, ".encrypted") {
+		return errors.New("当前文件已为加密文件,不可再加密...("+fileName+")")
+	}
+	stat, err := os.Stat(fileName)
 	if err != nil {
 		return err
 	}
@@ -300,21 +366,109 @@ func doEncryptFile(key string, fileName string) error {
 			return err
 		}
 	}
+	if flags.delSrc {
+		//删除源文件
+		os.Remove(fileName)
+	}
 
 	return nil
 }
 
+func dirCheck(mode, key, fileName string) error {
+	fmt.Println("警告：目录加密/解密具备风险性,请确认是否继续....")
+	reader := bufio.NewReader(os.Stdin)
+	tip := "你的选择(y/n)"
+	res, ok := getUserInput(reader, tip)
+	if !ok {
+		return errors.New("错误指令：停止目录加密/解密...")
+	}
+	if strings.ToLower(res) != "y" {
+		return errors.New("you choice No,停止目录加密/解密...")
+	}
+	fmt.Println("Ok, 请求提供身份认证秘钥...")
+	tip = "请输入(认证秘钥)"
+	res, ok = getUserInput(reader, tip)
+	if !ok {
+		return errors.New("错误输入: 停止目录加密/解密...")
+	}
+	deStr := base64.StdEncoding.EncodeToString([]byte(res))
+	if deStr == authKey {
+		fmt.Println("OK... we prepare encrypted this dir....")
+		fwErr := filepath.WalkDir(fileName, func(abPath string, info fs.DirEntry, err error) error {
+			if err != nil {
+				fmt.Printf("访问路径时发生错误: %v\n", err)
+				return nil
+			}
+			if info.IsDir() {
+				return nil
+			}
+
+			if mode == "en" {
+				fmt.Println("加密：", abPath)
+				 eErr := doEncryptFile(key, abPath)
+				 if eErr != nil {
+				 	fmt.Println("错误：", eErr)
+				 }
+			} else {
+				fmt.Println("解密：", abPath)
+				dErr := doDecryptFile(key, abPath)
+				if dErr != nil {
+					fmt.Println("错误：", dErr)
+				}
+			}
+			return nil
+
+		})
+		if fwErr != nil {
+			return fwErr
+		}
+
+	} else {
+		return errors.New("错误认证秘钥...")
+	}
+
+	return nil
+}
+
+func doDecryptFileCheck(key, fileName string) error {
+	stat, err := os.Stat(fileName)
+	if err != nil {
+		return err
+	}
+	if stat.IsDir() {
+		return dirCheck("de", key, fileName)
+	} else {
+		return doDecryptFile(key, fileName)
+	}
+}
+
+func doEncryptFileCheck(key string, fileName string) error {
+	stat, err := os.Stat(fileName)
+	if err != nil {
+		return err
+	}
+	if stat.IsDir() {
+		return dirCheck("en", key, fileName)
+	} else {
+		return doEncryptFile(key, fileName)
+	}
+
+}
+
+
 func main() {
-	flag.StringVar(&flags.mode, "m", "", "模式")
+	flag.StringVar(&flags.mode, "m", "", "模式(en/de)")
 	flag.StringVar(&flags.key, "k", "", "秘钥（加密==解密）")
 	flag.StringVar(&flags.fileName, "file", "", "加解密文件")
 	flag.StringVar(&flags.data, "data", "", "加解密数据")
-	flag.BoolVar(&flags.show, "show", false, "是否只展示不输出到文件(只合适小文本文件)")
+	flag.BoolVar(&flags.show, "show", false, "只展示不输出到文件(只合适小文本文件)")
+	flag.BoolVar(&flags.delSrc, "dsrc", false, "删除源文件")
 	flag.Parse()
 
 	//flags.mode = "de"
 	//flags.key = "yangmingsen"
-	//flags.fileName = "G:\\2023_Data\\fpy-rr.txt.encrypted"
+	//flags.fileName = "E:\\tempFiles\\demo-api"
+	//flags.delSrc = true
 	//flags.show = true
 	//flags.data = "bdC6IQA/ygjDpYJ6WrHjLSZrSo7J2aDackOx"
 
@@ -387,7 +541,7 @@ func main() {
 		{
 			if isFile {
 				//文件加密
-				if err := doEncryptFile(key, filename); err != nil {
+				if err := doEncryptFileCheck(key, filename); err != nil {
 					fmt.Println("Error encrypting file:", err)
 					return
 				}
@@ -408,7 +562,7 @@ func main() {
 	case "decrypt":
 		{
 			if isFile {
-				if err := doDecryptFile(key, filename); err != nil {
+				if err := doDecryptFileCheck(key, filename); err != nil {
 					fmt.Println("Error decrypting file:", err)
 					return
 				}
