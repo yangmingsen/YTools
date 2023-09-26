@@ -9,6 +9,11 @@ import (
 
 var logger = log.New(os.Stderr, "", log.Lshortfile|log.LstdFlags)
 
+func Yprint(a ...interface{}) {
+	//先打印输出
+	fmt.Println(a)
+}
+
 func Logf(f string, v ...interface{}) {
 	if ycomm.Debug {
 		logger.Output(2, fmt.Sprintf(f, v...))

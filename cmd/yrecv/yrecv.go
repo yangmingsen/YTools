@@ -2,11 +2,12 @@ package main
 
 import (
 	"YTools/ycomm"
-	"YTools/ylog"
 	"YTools/ynet"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
+	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -43,6 +44,18 @@ func init() {
 	mutilFilePort = "9949"
 	singleFilePort = "8848"
 	detectPort = 8850
+}
+
+var logger = log.New(os.Stderr, "", log.Lshortfile|log.LstdFlags)
+
+func yprint(a ...interface{}) {
+	//先打印输出
+	fmt.Println(a)
+}
+func logf(f string, v ...interface{}) {
+	if ycomm.Debug {
+		logger.Output(2, fmt.Sprintf(f, v...))
+	}
 }
 
 //传输进度条显示
@@ -111,12 +124,11 @@ func showSingleBar(current *int64, total int64) {
 
 //单文件函数
 //***********************************************************************
-func recvFile(conn net.Conn, fileName string, fileSize int64) {
+func recvSmallFile(conn net.Conn, fileName string, fileSize int64) {
 	defer conn.Close()
 
 	current := int64(0)
-
-	wg.Add(1)
+	//wg.Add(1)
 	go showSingleBar(&current, fileSize)
 
 	file, err0 := os.Create(fileName)
@@ -134,7 +146,7 @@ func recvFile(conn net.Conn, fileName string, fileSize int64) {
 
 		if err0 != nil && err0 != io.EOF {
 			fmt.Println("读取网络流出错>>>>[", err0, "]")
-			return
+			break
 		}
 
 		if current == fileSize {
@@ -261,66 +273,232 @@ func listenUDP(ip string) {
 
 }
 
-func handleRecvFile(listener net.Listener) {
-	defer wg.Done()
+const tmpSlice = ycomm.TmpSlice
+const SPLIT_FLAG = ycomm.SPLIT_FLAG
 
+func singleFileReceiver(listener net.Listener) {
+	//defer wg.Done()
 	for {
 		//阻塞监听client connection
 		conn, err1 := listener.Accept()
 		if err1 != nil {
-			fmt.Println("listener.Accept() err1:", err1)
-			return
+			logf("singleFileReceiver listener.Accept() err1:", err1)
+			conn.Close()
 		}
 
-		//获取client 发送的文件名
-		buf := make([]byte, 4096)
-		n, err2 := conn.Read(buf)
-		if err2 != nil {
-			fmt.Println("conn.Read(buf) err2:", err2)
-			return
+		rcvBytes, err0 := ynet.Recv(conn)
+		if err0 != nil {
+			logf("singleFileReceiver 读取出错: ", err0)
+			continue
 		}
+		rcvMsg := string(rcvBytes)
+		logf("收到 ysend 信息>>>>", rcvMsg)
+		reqInfo := ycomm.ParseStrToRequestInfo(rcvMsg)
 
-		fileInfo := string(buf[:n])
-		split := strings.Split(fileInfo, "+")
-		fileName := split[0]
-		fileSize := split[1]
-
-		//将string转换为64位int
-		recvFileSizeInt64, _ := strconv.ParseInt(fileSize, 10, 64)
-
-		addr := conn.RemoteAddr().String() //获得远程ip的格式为 [ip]:[port]
-		splitAddr := strings.Split(addr, ":")
-
-		//提示信息
-		fmt.Print("您是否（Y/N）愿意接受对方（" + splitAddr[0] + "）向您发送文件: " + fileName + " 大小为: ")
-		if recvFileSizeInt64 < SizeB {
-			fmt.Printf("%.0fB\n", float64(recvFileSizeInt64))
-		} else if recvFileSizeInt64 < SizeKB {
-			fmt.Printf("%.2fKB\n", float64(recvFileSizeInt64)/1024)
-		} else if recvFileSizeInt64 < SizeMB {
-			fmt.Printf("%.2fMB\n", float64(recvFileSizeInt64)/1024/1024)
-		} else if recvFileSizeInt64 < SizeGB {
-			fmt.Printf("%.2fGB\n", float64(recvFileSizeInt64)/1024/1024/1024)
-		}
-
-		//用户选择
-		var ch string
-		fmt.Scan(&ch)
-		ch = strings.ToLower(ch)
-
-		if ch == "y" {
-			//同意接受文件
-			conn.Write([]byte("yes"))
-
-			wg.Add(1)
-			//接收文件
+		if reqInfo.Cmd == ycomm.BIGFILE_INIT {
 			go func() {
-				defer wg.Done()
-				recvFile(conn, fileName, recvFileSizeInt64)
-			}()
+				dirExists := func(path string) bool {
+					_, dErr0 := os.Stat(path)
+					if dErr0 != nil {
+						if os.IsExist(dErr0) {
+							return true
+						}
+						return false
+					}
+					return true
+				}
 
+				cpuNum := runtime.NumCPU()
+				isExsit := dirExists(tmpSlice)
+				logf("目录是否存在: ", isExsit)
+				if !isExsit {
+					os.Mkdir(tmpSlice, os.ModePerm)
+				}
+				ynet.Send(conn, ycomm.ParseResponseToBytes(ycomm.ResponseInfo{
+					Ok:      true,
+					Message: strconv.Itoa(cpuNum),
+					Status:  "Ok",
+				}))
+			}()
+		} else if reqInfo.Cmd == ycomm.BIGFILE_SLICE_SYNC {
+			go func() {
+				var buf []byte = nil
+				for {
+					rbs, er1 := ynet.Recv(conn)
+					if er1 != nil {
+						yprint("bigFileSliceSync收取数据异常：", er1)
+						break
+					}
+					logf("收到bigFileSliceSync数据: ", string(rbs))
+					fileSlice := ycomm.ParseByteToFileSlice(rbs)
+					if buf == nil {
+						buf = make([]byte, fileSlice.Length)
+					}
+					if int64(len(buf)) != fileSlice.Length {
+						buf = make([]byte, fileSlice.Length)
+					}
+					readStream := func(tConn net.Conn, buf []byte, n int) {
+						cnt := 0
+						tmpBuf := make([]byte, 1024)
+						for {
+							rn, tErr := tConn.Read(tmpBuf)
+							if tErr != nil {
+								yprint("bigFileSliceSync收取流数据时报错：", tErr)
+								break
+							}
+							for i := 0; i < rn; i++ {
+								buf[cnt] = tmpBuf[i]
+								cnt++
+							}
+							if cnt >= n {
+								break
+							}
+						}
+					}
+					readStream(conn, buf, int(fileSlice.Length))
+					hash := ycomm.Md5Hash(buf)
+					if hash != fileSlice.Hash {
+						ynet.Send(conn, ycomm.ParseResponseToBytes(ycomm.ResponseInfo{
+							Ok:      false,
+							Message: "Hash check error",
+							Status:  "Ok",
+						}))
+						continue
+					}
+					pathName := tmpSlice + ycomm.GetOsSparator() + fileSlice.Name + SPLIT_FLAG + strconv.Itoa(fileSlice.Id)
+					logf("创建文件地址：", pathName)
+					//建立文件
+					newSliceFile, nErr1 := os.Create(pathName)
+					if nErr1 != nil {
+						logf("创建新分片文件失败: ", nErr1)
+						ynet.Send(conn, ycomm.ParseResponseToBytes(ycomm.ResponseInfo{
+							Ok:      false,
+							Message: "create new slice file failed",
+							Status:  "Ok",
+						}))
+						continue
+					}
+					_, nErr2 := newSliceFile.Write(buf[:])
+					if nErr2 != nil {
+						logf("数据写入新分片文件失败: ", nErr2)
+						ynet.Send(conn, ycomm.ParseResponseToBytes(ycomm.ResponseInfo{
+							Ok:      false,
+							Message: "数据写入新分片文件失败",
+							Status:  "Ok",
+						}))
+						continue
+					}
+					newSliceFile.Close()
+
+					logf("分片文件：", pathName, " 接收完成")
+					ynet.Send(conn, ycomm.ParseResponseToBytes(ycomm.ResponseInfo{
+						Ok:      true,
+						Message: "success",
+						Status:  "Ok",
+					}))
+				}
+				conn.Close()
+
+			}()
+		} else if reqInfo.Cmd == ycomm.BIGFILE_SLICE_SYNC_FINISH {
+			go func() {
+				mergeSliceFiles := func(src string) {
+					files, _ := ioutil.ReadDir(src)
+					newFileName := ""
+					if len(files) > 0 {
+						newFileName = strings.Split(files[0].Name(), SPLIT_FLAG)[0]
+					}
+					logf("newFileName= ", newFileName)
+					getId := func(spName string) int {
+						idStr := strings.Split(spName, SPLIT_FLAG)[1]
+						id, _ := strconv.Atoi(idStr)
+						return id
+					}
+
+					aFile, err := os.OpenFile(newFileName, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
+					if err != nil {
+						fmt.Println("FileSequenceMerge 打开A文件失败:", err)
+						return
+					}
+					defer aFile.Close()
+					sortFiles := make([]fs.FileInfo, len(files))
+					for i := 0; i < len(files); i++ {
+						id := getId(files[i].Name())
+						sortFiles[id] = files[i]
+					}
+
+					for _, v := range sortFiles {
+						appendPath := tmpSlice + ycomm.GetOsSparator() + v.Name()
+						bFile, err1 := os.Open(appendPath)
+						if err1 != nil {
+							logf("打开B文件失败:", err)
+							bFile.Close()
+							return
+						}
+
+						// 从B文件读取内容并追加到A文件
+						_, err = io.Copy(aFile, bFile)
+						if err != nil {
+							logf("追加文件内容失败:", err)
+							return
+						}
+
+						bFile.Close()
+						err1 = os.Remove(appendPath)
+						if err1 != nil {
+							logf("删除分片文件失败：", err1)
+						}
+					}
+
+				}
+				mergeSliceFiles("./" + tmpSlice)
+				logf("合并完成....")
+
+			}()
+		} else if reqInfo.Cmd == ycomm.FILE_INFO_TIP {
+			go func() {
+				buf, _ := ynet.Recv(conn)
+				fileInfo := string(buf)
+				split := strings.Split(fileInfo, "+")
+				fileName := split[0]
+				fileSize := split[1]
+				//将string转换为64位int
+				recvFileSizeInt64, _ := strconv.ParseInt(fileSize, 10, 64)
+				addr := conn.RemoteAddr().String() //获得远程ip的格式为 [ip]:[port]
+				splitAddr := strings.Split(addr, ":")
+
+				//提示信息
+				fmt.Print("您是否（Y/N）愿意接受对方（" + splitAddr[0] + "）向您发送文件: " + fileName + " 大小为: ")
+				if recvFileSizeInt64 < SizeB {
+					fmt.Printf("%.0fB\n", float64(recvFileSizeInt64))
+				} else if recvFileSizeInt64 < SizeKB {
+					fmt.Printf("%.2fKB\n", float64(recvFileSizeInt64)/1024)
+				} else if recvFileSizeInt64 < SizeMB {
+					fmt.Printf("%.2fMB\n", float64(recvFileSizeInt64)/1024/1024)
+				} else if recvFileSizeInt64 < SizeGB {
+					fmt.Printf("%.2fGB\n", float64(recvFileSizeInt64)/1024/1024/1024)
+				}
+
+				//用户选择
+				var ch string
+				fmt.Scan(&ch)
+				ch = strings.ToLower(ch)
+				if ch == "y" {
+					//同意接受文件
+					//conn.Write([]byte("yes"))
+					ynet.SendStr(conn, "yes")
+					if ycomm.IsSmallSend(recvFileSizeInt64) {
+						logf("小文件发送开始...")
+						recvSmallFile(conn, fileName, recvFileSizeInt64)
+					} else {
+						logf("大文件接收开始...")
+					}
+				} else {
+					ynet.SendStr(conn, "no")
+				}
+			}()
 		} else {
-			conn.Write([]byte("no"))
+			logf("非法请求: ", rcvMsg)
 		}
 
 	}
@@ -333,7 +511,7 @@ func handleRecvFile(listener net.Listener) {
 func doCreateServer(port string) net.Listener {
 	socket, err := ynet.ServerSocket(port)
 	if err != nil {
-		ylog.Logf("建立网络Listen出错>>>>", err)
+		logf("建立网络Listen出错>>>>", err)
 		return nil
 	}
 	return socket
@@ -556,16 +734,16 @@ func fileSizeReadable(fileSize int64) string {
 func doSingleFileHandler(conn net.Conn) {
 	//响应一下
 	//ynet.SendResponse(conn, ycomm.ResponseInfo{Ok: true, Message: "ok", Status: "ok"})
-	ylog.Logf("响应ok,准备接收单文件大小等信息>>>>")
+	logf("响应ok,准备接收单文件大小等信息>>>>")
 	rMsg := ycomm.ReadMsg(conn)
-	ylog.Logf("收到单文件传输数据[", rMsg, "]>>>>>>")
+	logf("收到单文件传输数据[", rMsg, "]>>>>>>")
 
 	//数据格式 => 文件名称+大小
 	fileDataMap := ycomm.ParseStrToMapData(rMsg)
 
 	fileName := fileDataMap[ycomm.FILE_NAME]
 	fileSizeStr := fileDataMap[ycomm.FILE_SIZE]
-	ylog.Logf("解析后文件名[", fileName, "] 文件大小[", fileSizeStr, "]B")
+	logf("解析后文件名[", fileName, "] 文件大小[", fileSizeStr, "]B")
 
 	//将string转换为64位int
 	fileSize, _ := strconv.ParseInt(fileSizeStr, 10, 64)
@@ -574,9 +752,9 @@ func doSingleFileHandler(conn net.Conn) {
 	//响应yroute可以发送数据了
 	ynet.SendResponse(conn, ycomm.ResponseInfo{Ok: true, Message: "Prepare fileStream", Status: "Ok"})
 
-	ylog.Logf(">>>>准备接收文件流数据>>>>")
-	recvFile(conn, fileName, fileSize)
-	ylog.Logf(">>>>接收文件流数据完毕,结束>>>>")
+	logf(">>>>准备接收文件流数据>>>>")
+	recvSmallFile(conn, fileName, fileSize)
+	logf(">>>>接收文件流数据完毕,结束>>>>")
 
 }
 
@@ -594,13 +772,13 @@ func doHandlerRequest(conn net.Conn) bool {
 		go doFileHandler(conn)
 
 	} else if rMsg == ycomm.YROUTE_CHECK_YRECV { //通用性检查命令
-		ylog.Logf("收到来自yrout的连接检查命令>>>>")
+		logf("收到来自yrout的连接检查命令>>>>")
 
 		ynet.SendResponse(conn, ycomm.ResponseInfo{Ok: true, Message: "ok", Status: "ok"})
-		ylog.Logf("响应ok信息给route>>>>")
+		logf("响应ok信息给route>>>>")
 
 	} else if rMsg == ycomm.YSEND_TO_YROUTE_TO_YRECV_SINGLE_FILE {
-		ylog.Logf("收到来自yroute的YROUTE_SEND_SINGLE_FILE命令")
+		logf("收到来自yroute的YROUTE_SEND_SINGLE_FILE命令")
 		go doSingleFileHandler(conn)
 
 	} else {
@@ -620,7 +798,7 @@ func doAcceptMultiFileTranServer(netS net.Listener) {
 		}
 
 		if doHandlerRequest(conn) == false {
-			ylog.Logf("错误: Yrecv主程序结束")
+			logf("错误: Yrecv主程序结束")
 			break
 		}
 
@@ -642,13 +820,13 @@ func doMultiFileTranServer() {
 //含单文件传输服务和多文件传输服务
 //
 func doAutoBindServer() {
-	ylog.Logf("自动绑定模式===>开始创建单文件传输服务")
+	logf("自动绑定模式===>开始创建单文件传输服务")
 	singleServer := doCreateServer(singleFilePort)
 	if singleServer != nil {
 		defer singleServer.Close()
 		fmt.Println("SServer Successful running in ", singleServer.Addr().String())
 		wg.Add(1)
-		go handleRecvFile(singleServer)
+		go singleFileReceiver(singleServer)
 	}
 
 	//do udp fun
@@ -675,7 +853,7 @@ func doSpecificBindServer(ip string) {
 		defer singleServer.Close()
 		fmt.Println("SServer Successful running in ", singleServer.Addr().String())
 		wg.Add(1)
-		go handleRecvFile(singleServer)
+		go singleFileReceiver(singleServer)
 	} else {
 		fmt.Println("SServer 绑定失败")
 	}
@@ -721,7 +899,7 @@ func getUsage() {
 //监听BaseConn事件
 func doListenBaseConnEvent(conn net.Conn) {
 
-	ylog.Logf(">>>>监听BaseConn启动")
+	logf(">>>>监听BaseConn启动")
 	for {
 		//收取信息
 		rcvBytes, err0 := ycomm.ReadByte0(conn)
@@ -730,14 +908,14 @@ func doListenBaseConnEvent(conn net.Conn) {
 			break
 		}
 		rcvMsg := string(rcvBytes)
-		ylog.Logf("收到Yroute BaseConn 信息>>>>", rcvMsg)
+		logf("收到Yroute BaseConn 信息>>>>", rcvMsg)
 		reqInfo := ycomm.ParseStrToRequestInfo(rcvMsg)
 
 		if reqInfo.Cmd == ycomm.YRECV_BASECONN_SINGLE { //大海模式 单文件传输
-			ylog.Logf("收到route大海模式传输单文件请求>>>>>>")
+			logf("收到route大海模式传输单文件请求>>>>>>")
 			yroutConn, err1 := ynet.GetRemoteConnection(flags.RouteIP, ycomm.RoutePort)
 			if err1 != nil {
-				ylog.Logf("大海模式yrecv与yroute建立链接失败>>>>>>")
+				logf("大海模式yrecv与yroute建立链接失败>>>>>>")
 				//如果在于route建立连接的情况下出错,返回失败信息
 				ynet.SendResponse(conn, ycomm.ResponseInfo{
 					Ok:      false,
@@ -750,14 +928,14 @@ func doListenBaseConnEvent(conn net.Conn) {
 					Message: "ok",
 					Status:  "ok",
 				})
-				ylog.Logf("大海模式yrecv与yroute建立链接成功>>>>>>")
-				ylog.Logf("大海模式yrecv向yroute发送YRECV_REQUEST_ESTABLISH_CONN请求>>>>>>")
+				logf("大海模式yrecv与yroute建立链接成功>>>>>>")
+				logf("大海模式yrecv向yroute发送YRECV_REQUEST_ESTABLISH_CONN请求>>>>>>")
 
 				var dMap = make(map[string]string)
 				dMap[ycomm.TO_TYPTE] = ycomm.SINGLE
 				dMap[ycomm.HOSTNAME] = ycomm.GetHostName()
 				mapStr := ycomm.ParseMapToStr(dMap)
-				ylog.Logf("发送数据>>>", mapStr)
+				logf("发送数据>>>", mapStr)
 
 				ynet.SendRequest(yroutConn, ycomm.RequestInfo{
 					Cmd:   ycomm.YRECV_REQUEST_ESTABLISH_CONN,
@@ -766,22 +944,22 @@ func doListenBaseConnEvent(conn net.Conn) {
 				})
 
 				//开始文件处理
-				ylog.Logf("大海模式: 准备接收文件数据>>>>>>")
+				logf("大海模式: 准备接收文件数据>>>>>>")
 				go doHandlerRequest(yroutConn)
-				ylog.Logf("大海模式: 接收文件数据>>>>>>结束")
+				logf("大海模式: 接收文件数据>>>>>>结束")
 
 			}
 
 		} else if reqInfo.Cmd == ycomm.YRECV_BASECONN_HEADRTBEAT {
 			//心跳
-			ylog.Logf("收到心跳>>>>>>")
+			logf("收到心跳>>>>>>")
 
 		} else if reqInfo.Cmd == ycomm.YSEND_DIR_DATA_SYNC {
-			ylog.Logf("收到YSEND_DIR_DATA_SYNC>>>>开始处理")
+			logf("收到YSEND_DIR_DATA_SYNC>>>>开始处理")
 
 			newYRoutConn, err01 := ynet.Socket(flags.RouteIP, ycomm.RoutePort)
 			if err01 != nil {
-				ylog.Logf("创建同步目录数据连接失败>>>>>", err01)
+				logf("创建同步目录数据连接失败>>>>>", err01)
 				ynet.SendResponse(conn, ycomm.ResponseInfo{
 					Ok:      false,
 					Message: "创建同步目录数据连接失败>>>" + err01.Error(),
@@ -792,7 +970,7 @@ func doListenBaseConnEvent(conn net.Conn) {
 			dMap[ycomm.TO_TYPTE] = ycomm.SINGLE
 			dMap[ycomm.HOSTNAME] = ycomm.GetHostName()
 			mapStr1 := ycomm.ParseMapToStr(dMap)
-			ylog.Logf("创建同步连接发送数据>>>", mapStr1)
+			logf("创建同步连接发送数据>>>", mapStr1)
 
 			ynet.SendRequest(newYRoutConn, ycomm.RequestInfo{
 				Cmd:   ycomm.YRECV_REQUEST_ESTABLISH_CONN,
@@ -801,22 +979,22 @@ func doListenBaseConnEvent(conn net.Conn) {
 			})
 
 			//返回信息
-			ylog.Logf("Ok 开始同步目录数据...>>>>>>")
+			logf("Ok 开始同步目录数据...>>>>>>")
 			ynet.SendResponse(conn, ycomm.ResponseInfo{
 				Ok:      true,
 				Message: "Ok 开始同步目录数据...",
 			})
 
-			ylog.Logf("准备从Route读取目录数据...>>>>>>")
+			logf("准备从Route读取目录数据...>>>>>>")
 			rMsg := ycomm.ReadMsg(newYRoutConn)
 			if rMsg == "d" {
-				ylog.Logf("收到YSEND_DIR_DATA_SYNC>>>>开始处理目录数据>>>>")
+				logf("收到YSEND_DIR_DATA_SYNC>>>>开始处理目录数据>>>>")
 				doDirCreate(newYRoutConn)
-				ylog.Logf("处理目录数据完毕>>>>")
+				logf("处理目录数据完毕>>>>")
 			}
 
 		} else if reqInfo.Cmd == ycomm.YSEND_MUL_FILE_SYNC {
-			ylog.Logf("收到YSEND_MUL_FILE_SYNC>>>>开始处理>>>", reqInfo.ParseToJsonStr())
+			logf("收到YSEND_MUL_FILE_SYNC>>>>开始处理>>>", reqInfo.ParseToJsonStr())
 			dMap := ycomm.ParseStrToMapData(reqInfo.Data)
 			coreStr := dMap[ycomm.CORE_NUM]
 
@@ -850,14 +1028,14 @@ func doListenBaseConnEvent(conn net.Conn) {
 				Ok:      true,
 				Message: "创建连接成功",
 			})
-			ylog.Logf("创建", coreNum, "个连接成功>>>>")
+			logf("创建", coreNum, "个连接成功>>>>")
 
 			for i := 0; i < coreNum; i++ {
-				ylog.Logf("准备向yrout发起YRECV_REQUEST_ESTABLISH_CONN=>MULTI>>>>>>>", i)
+				logf("准备向yrout发起YRECV_REQUEST_ESTABLISH_CONN=>MULTI>>>>>>>", i)
 				go doParepareAcceptFileStream(connList[i])
 			}
 
-			ylog.Logf("创建所有连接完毕>>>>")
+			logf("创建所有连接完毕>>>>")
 
 		}
 
@@ -870,7 +1048,7 @@ func doParepareAcceptFileStream(conn net.Conn) {
 	dMap[ycomm.TO_TYPTE] = ycomm.MULTI
 	dMap[ycomm.HOSTNAME] = ycomm.GetHostName()
 	mapStr := ycomm.ParseMapToStr(dMap)
-	ylog.Logf("发送数据>>>", mapStr)
+	logf("发送数据>>>", mapStr)
 
 	ynet.SendRequest(conn, ycomm.RequestInfo{
 		Cmd:   ycomm.YRECV_REQUEST_ESTABLISH_CONN,
@@ -879,19 +1057,19 @@ func doParepareAcceptFileStream(conn net.Conn) {
 	})
 
 	//开始文件处理
-	ylog.Logf("大海模式: 准备接收文件流数据>>>>>>")
+	logf("大海模式: 准备接收文件流数据>>>>>>")
 	doHandlerRequest(conn)
-	ylog.Logf("大海模式: 接收文件流数据>>>>>>结束")
+	logf("大海模式: 接收文件流数据>>>>>>结束")
 
 }
 
 func doRouter(routeIp, listenIp string) {
 	conn, err0 := ynet.GetRemoteConnection(routeIp, ycomm.RoutePort)
 	if err0 != nil {
-		ylog.Logf(">>>连接远程Route[", routeIp+":"+ycomm.RoutePort, "]异常>>>>", err0)
+		logf(">>>连接远程Route[", routeIp+":"+ycomm.RoutePort, "]异常>>>>", err0)
 		return
 	}
-	ylog.Logf("yrecv成功连接远程[" + routeIp + ":" + ycomm.RoutePort + "]Router>>>>")
+	logf("yrecv成功连接远程[" + routeIp + ":" + ycomm.RoutePort + "]Router>>>>")
 
 	hostname, _ := os.Hostname()
 	coreN := runtime.NumCPU() * 2
@@ -907,15 +1085,15 @@ func doRouter(routeIp, listenIp string) {
 
 	//ycomm.WriteMsg(conn, req.ParseToJsonStr())
 	ynet.SendRequest(conn, req)
-	ylog.Logf(">>>发送注册信息>>>", req.ParseToJsonStr(), ">>>到Route")
+	logf(">>>发送注册信息>>>", req.ParseToJsonStr(), ">>>到Route")
 
 	msgStr := ycomm.ReadMsg(conn)
-	ylog.Logf(">>>收到Route响应数据>>>", msgStr)
+	logf(">>>收到Route响应数据>>>", msgStr)
 
 	//
 	go doListenBaseConnEvent(conn)
 
-	ylog.Logf(">>>>>启动单文件,多文件传输及探测响应服务")
+	logf(">>>>>启动单文件,多文件传输及探测响应服务")
 	doSpecificBindServer(listenIp)
 	//阻塞
 	<-exitFlag
@@ -931,12 +1109,12 @@ func main() {
 	flag.BoolVar(&ycomm.Debug, "debug", false, "debug mode")
 	flag.Parse()
 
-	ylog.Logf("输入参数==>[", flags, "]")
+	logf("输入参数==>[", flags, "]")
 
 	argLen := len(os.Args) //获取参数长度
 
 	if argLen == 1 { //默认自动获取ip监听模式
-		ylog.Logf("自动获取ip模式=====>>>>>>")
+		logf("自动获取ip模式=====>>>>>>")
 		doAutoBindServer()
 		wg.Wait()
 
@@ -946,12 +1124,12 @@ func main() {
 			fmt.Println("错误(ERROR): 必须指定ListenIP")
 			os.Exit(01)
 		}
-		ylog.Logf("路由模式=====>>>>>>路由ip[", flags.RouteIP, "]===>本地绑定ip[", flags.ListenIP, "]")
+		logf("路由模式=====>>>>>>路由ip[", flags.RouteIP, "]===>本地绑定ip[", flags.ListenIP, "]")
 
 		doRouter(flags.RouteIP, flags.ListenIP)
 
 	} else if flags.ListenIP != "" { //如果是指定ip模式
-		ylog.Logf("指定ip模式=====>>>>>>[", flags.ListenIP, "]")
+		logf("指定ip模式=====>>>>>>[", flags.ListenIP, "]")
 		doSpecificBindServer(flags.ListenIP)
 		wg.Wait()
 	} else {

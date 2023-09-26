@@ -214,7 +214,7 @@ func getDeptNewFileName(fileName string) string {
 
 //获取加密文件名
 func getEptNewFileName(fileName string) string {
-	return fileName+YEPT
+	return fileName + YEPT
 }
 
 //解密文件数据实际实现
@@ -249,11 +249,11 @@ func decryptFile(key []byte, filename string) error {
 		fmt.Println(string(plaintext))
 		return nil
 	} else {
-		err =  ioutil.WriteFile(outPutName, plaintext, 0644)
+		err = ioutil.WriteFile(outPutName, plaintext, 0644)
 		if err != nil {
 			return err
 		} else {
-			return nil;
+			return nil
 		}
 	}
 }
@@ -304,15 +304,15 @@ var flags struct {
 	data     string
 	show     bool
 	delSrc   bool
-	debug   bool
+	debug    bool
 }
 
 func getUsage() {
 	flag.Usage()
 	fmt.Println("加密文件: ydes -m en -k 秘钥 -file ./hello.txt")
-	fmt.Println("解密文件: ydes -m de -k 秘钥 -file ./hello.txt.decrypted -dsrc 任何指")
-	fmt.Println("解密文件: ydes -m de -k 秘钥 -file ./hello.txt.decrypted -show 任何值")
-	fmt.Println("解密字符: ydes -m en -k 秘钥 -data 明文")
+	fmt.Println("解密文件: ydes -m de -k 秘钥 -file ./hello.txt.decrypted -dsrc ")
+	fmt.Println("解密文件: ydes -m de -k 秘钥 -file ./hello.txt.decrypted -show ")
+	fmt.Println("加密字符: ydes -m en -k 秘钥 -data 明文")
 	fmt.Println("解密字符: ydes -m de -k 秘钥 -data 密文")
 }
 
@@ -329,8 +329,8 @@ func containsAny(key string, any ...string) bool {
 
 //解密文件判断方法之一，这个地方判断是否进行大文件加密
 func doDecryptFile(key string, fileName string) error {
-	if !containsAny(fileName, YEPT, EPT){
-		return errors.New("非解密文件...("+fileName+")")
+	if !containsAny(fileName, YEPT, EPT) {
+		return errors.New("非解密文件...(" + fileName + ")")
 	}
 	stat, err := os.Stat(fileName)
 	if err != nil {
@@ -361,7 +361,7 @@ func doDecryptFile(key string, fileName string) error {
 //读取用户输入的命令
 func getUserInput(reader *bufio.Reader, tip string) (string, bool) {
 	// 读取用户输入的命令
-	fmt.Print("[",tip,"]$ ")
+	fmt.Print("[", tip, "]$ ")
 	command, err := reader.ReadString('\n')
 	if err != nil {
 		fmt.Println("获取输入命令出错: ", err)
@@ -376,12 +376,12 @@ func getUserInput(reader *bufio.Reader, tip string) (string, bool) {
 	return command, true
 }
 
-
 const authKey = "eWFuZ21pbmdzZW4="
+
 //加密文件判断方法之一，这个地方判断是否进行大文件加密
 func doEncryptFile(key, fileName string) error {
 	if containsAny(fileName, YEPT, EPT) {
-		return errors.New("当前文件已为加密文件,不可再加密...("+fileName+")")
+		return errors.New("当前文件已为加密文件,不可再加密...(" + fileName + ")")
 	}
 	stat, err := os.Stat(fileName)
 	if err != nil {
@@ -428,7 +428,7 @@ func dirCheck(mode, key, fileName string) error {
 	}
 	deStr := base64.StdEncoding.EncodeToString([]byte(res))
 	if deStr == authKey {
-		fmt.Println("OK... we prepare encrypted this dir....")
+		fmt.Println("OK... we prepare operation this dir....")
 		fwErr := filepath.WalkDir(fileName, func(abPath string, info fs.DirEntry, err error) error {
 			if err != nil {
 				fmt.Printf("访问路径时发生错误: %v\n", err)
@@ -440,10 +440,10 @@ func dirCheck(mode, key, fileName string) error {
 
 			if mode == "en" {
 				fmt.Println("加密：", abPath)
-				 eErr := doEncryptFile(key, abPath)
-				 if eErr != nil {
-				 	fmt.Println("错误：", eErr)
-				 }
+				eErr := doEncryptFile(key, abPath)
+				if eErr != nil {
+					fmt.Println("错误：", eErr)
+				}
 			} else {
 				fmt.Println("解密：", abPath)
 				dErr := doDecryptFile(key, abPath)
@@ -493,6 +493,7 @@ func doEncryptFileCheck(key string, fileName string) error {
 }
 
 var logger = log.New(os.Stderr, "", log.Lshortfile|log.LstdFlags)
+
 func logf(f string, v ...interface{}) {
 	if flags.debug {
 		logger.Output(2, fmt.Sprintf(f, v...))
@@ -586,7 +587,6 @@ func main() {
 	logf("fileName: ", filename)
 	logf("isFile: ", isFile)
 	logf("isData: ", isData)
-
 
 	switch command {
 	case "encrypt":

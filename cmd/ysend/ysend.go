@@ -2,11 +2,11 @@ package main
 
 import (
 	"YTools/ycomm"
-	"YTools/ylog"
 	"YTools/ynet"
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -38,6 +38,9 @@ var finishFileNum int32
 //传输任务队列
 var taskNum chan ycomm.CFileInfo
 
+//
+var SizeLimit = int64(1 * ycomm.Size1GB)
+
 const (
 	SizeB  = ycomm.SizeB
 	SizeKB = ycomm.SizeKB
@@ -63,6 +66,18 @@ func init() {
 	goroutineNum = runtime.NumCPU()
 	totalFileNum = 0
 	finishFileNum = 0
+}
+
+var logger = log.New(os.Stderr, "", log.Lshortfile|log.LstdFlags)
+
+func yprint(a ...interface{}) {
+	//先打印输出
+	fmt.Println(a)
+}
+func logf(f string, v ...interface{}) {
+	if ycomm.Debug {
+		logger.Output(2, fmt.Sprintf(f, v...))
+	}
 }
 
 func sendProgressBar() {
@@ -103,13 +118,11 @@ func sendProgressBar() {
 
 }
 
-func sendFile(conn net.Conn, filePath string) {
-
+func sendSmallFile(conn net.Conn, filePath string) {
 	file, err0 := os.Open(filePath)
 	fStat, _ := file.Stat()
 
 	go sendProgressBar()
-
 	if err0 != nil {
 		fmt.Println("os.Open err0:", err0)
 		return
@@ -118,26 +131,19 @@ func sendFile(conn net.Conn, filePath string) {
 
 	var nowSize int64
 	nowSize = 0 //当前下载位置
-
 	buf := make([]byte, 4096)
-
 	//test
-
 	for {
 		n, err1 := file.Read(buf)
-
 		nowSize += int64(n)
 		a = float64(nowSize) //更新a值
-
 		_, err2 := conn.Write(buf[:n])
-
 		if err1 != nil {
 			if err1 == io.EOF {
 				fmt.Println("send file ok! FileSize=", fStat.Size(), "   NowSize=", nowSize)
 			} else {
 				fmt.Println("file.Read err1:", err1)
 			}
-
 			break
 		}
 
@@ -151,7 +157,7 @@ func sendFile(conn net.Conn, filePath string) {
 
 // filePath 文件路径 格式为 some.zip or some1.txt
 //targetIp 远程ip 格式为 ip:port => 192.168.25.72:8848
-func parseSingleFileInfo(filePath string, targetIp string) {
+func prepareSendSingleFile(filePath string, targetIp string) {
 	//提取文件信息
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
@@ -177,35 +183,182 @@ func parseSingleFileInfo(filePath string, targetIp string) {
 	}
 
 	//向服务器发起请求
-	conn, err1 := net.Dial("tcp", targetIp)
+	baseConn, err1 := net.Dial("tcp", targetIp)
 	if err1 != nil {
-		fmt.Println("net.Dial err: ", err)
+		fmt.Println("net.Dial err: ", err1)
 		return
 	}
-	defer conn.Close()
+	defer baseConn.Close()
 
 	//向目标服务器发送文件名
-	_, err2 := conn.Write([]byte(fileName + "+" + strconv.FormatInt(int64(sendFileSize), 10)))
-	if err2 != nil {
-		fmt.Println("conn.Write err:", err)
-		return
-	}
+	initInfo := ycomm.RequestInfo{Cmd: ycomm.FILE_INFO_TIP}.ParseToJsonStr()
+	ynet.SendStr(baseConn, initInfo)
+
+	//向目标服务器发送文件名
+	fileInfoBytes := []byte(fileName + "+" + strconv.FormatInt(sendFileSize, 10))
+	ynet.Send(baseConn, fileInfoBytes)
 
 	//提示用户发送的文件正在等待对方同意接受
 	fmt.Println("您发送的文件正在等待对方接受,请您稍等....")
-
 	//recv remote server 'ok' str.
-	buf := make([]byte, 16)
-	n, err3 := conn.Read(buf)
-	if err3 != nil {
-		fmt.Println("conn.Read err:", err3)
-		return
-	}
+	buf, _ := ynet.Recv(baseConn)
+	if "yes" == string(buf) {
+		fmt.Println("对方同意接受您的文件,准备发送....")
+		if ycomm.IsSmallSend(sendFileSize) {
+			sendSmallFile(baseConn, filePath)
+		} else {
+			//计算分片数及区间
+			sliceFun := func(fSzie int64) []ycomm.FileSliceInfo {
+				for i := goroutineNum; ; i++ {
+					sliceLen := fSzie / int64(i)
+					if sliceLen < SizeLimit {
+						sliceNum := i
+						fsi := make([]ycomm.FileSliceInfo, sliceNum)
+						for i := 0; i < sliceNum; i++ {
+							if i+1 == sliceNum {
+								fsi[i] = ycomm.FileSliceInfo{Id: i, Start: sliceLen * int64(i), Length: fSzie - sliceLen*int64(i)}
+							} else {
+								fsi[i] = ycomm.FileSliceInfo{Id: i, Start: sliceLen * int64(i), Length: sliceLen}
+							}
+						}
+						return fsi
+					}
+				}
+			}
+			sliceList := sliceFun(sendFileSize)
+			//总任务数
+			totalTaskNum := len(sliceList)
+			logf("分片总数：", totalTaskNum)
+			//多线程共享channel
+			sliceTaskChannel := make(chan ycomm.FileSliceInfo, totalTaskNum)
+			for _, v := range sliceList {
+				sliceTaskChannel <- v
+			}
 
-	if "yes" == string(buf[:n]) {
-		fmt.Println("对方同意接受您的文件,正在发送中....")
-		wg.Add(1) //一个 go 等待
-		sendFile(conn, filePath)
+			//确定双方连接数
+			curCPUCoreNum := goroutineNum // runtime.NumCPU()
+			logf("当前cpu核心数：", curCPUCoreNum)
+			conn1, err1 := ynet.Socket1(targetIp)
+			if err1 != nil {
+				yprint("确定双方连接数，建立连接时报错: ", err1)
+			}
+			ynet.Send(conn1, ycomm.RequestInfo{Cmd: ycomm.BIGFILE_INIT}.ParseToByte())
+
+			//Responsenfo{OK: true, Message: "12", Status: "OK"}
+			rBytes, _ := ynet.Recv(conn1)
+			serverCoreInfo := ycomm.ParseByteToResponseInfo(rBytes)
+			conn1.Close()
+
+			logf("收到来自Server的CPU核心数信息: ", string(rBytes))
+			serverCPUCoreNum, _ := strconv.Atoi(serverCoreInfo.Message)
+			min := func(a, b int) int {
+				if a > b {
+					return b
+				}
+				return a
+			}
+
+			calculateCoreTaskNum := func(totalTNum, coreCpuNum int) int {
+				if totalTNum > coreCpuNum*3 {
+					return coreCpuNum * 2
+				}
+
+				return totalTNum / 2
+			}
+
+			//传输线程数
+			coreTaskNum := calculateCoreTaskNum(totalTaskNum, min(curCPUCoreNum, serverCPUCoreNum))
+			logf("确定双方建立传输连接数：", coreTaskNum)
+			//完成控制
+			finishTaskChannel := make(chan bool, 1)
+			//任务完成统计channel ,这里的数量应该线程数
+			taskFinishNumChannel := make(chan int, coreTaskNum)
+			go func() {
+				cnt := 0
+				for {
+					cnt = cnt + <-taskFinishNumChannel
+					if cnt == totalTaskNum {
+						break
+					}
+				}
+				//所有任务完成通知
+				finishTaskChannel <- true
+			}()
+
+			sendTargetFile, err3 := os.Open(filePath)
+			defer sendTargetFile.Close()
+			if err3 != nil {
+				yprint("打开发送文件失败. ", err3)
+				//目标文件打开失败直接退出
+				os.Exit(-1)
+			}
+			//并发传输
+			for i := 0; i < coreTaskNum; i++ {
+				id := i
+				go func() {
+					goroutineName := "goroutine[" + strconv.Itoa(id) + "]"
+					curConn, err2 := ynet.Socket1(targetIp)
+					if err2 != nil {
+						yprint("建立传输分片连接失败. id=", id, " 错误信息:", err2)
+						return
+					}
+					ynet.Send(curConn, ycomm.RequestInfo{Cmd: ycomm.BIGFILE_SLICE_SYNC}.ParseToByte())
+					var buf []byte = nil
+					for {
+						if len(sliceTaskChannel) == 0 {
+							break
+						}
+						//获取一个任务
+						task := <-sliceTaskChannel
+						if buf == nil {
+							buf = make([]byte, task.Length)
+						}
+						if int64(len(buf)) != task.Length {
+							buf = make([]byte, task.Length)
+						}
+
+						task.Name = ycomm.GetFileName(sendTargetFile.Name())
+						ycomm.FileReadByOffset1(sendTargetFile, buf, task.Start)
+						if task.Hash == "" {
+							task.Hash = ycomm.Md5Hash(buf)
+						}
+
+						jsonStr := task.ParseFileSliceToJsonStr()
+						logf(goroutineName, "发送同步头数据数据：", jsonStr)
+						ynet.SendStr(curConn, jsonStr)
+
+						//发送流
+						curConn.Write(buf)
+
+						//是否需要重新传输该任务
+						tmpBytes, _ := ynet.Recv(curConn)
+						logf(goroutineName, "收到来自Server是否重传该Slice文件响应:", string(tmpBytes))
+						retryInfo := ycomm.ParseByteToResponseInfo(tmpBytes)
+						if !retryInfo.Ok {
+							//重新加入队列
+							sliceTaskChannel <- task
+						} else {
+							//如果完成
+							taskFinishNumChannel <- 1
+						}
+
+					}
+					curConn.Close()
+				}()
+			}
+
+			//等待完成
+			<-finishTaskChannel
+
+			//发送最后合并指令
+			finishConn, err10 := ynet.Socket1(targetIp)
+			defer finishConn.Close()
+			if err10 != nil {
+				yprint("建立finshConn失败: ", err10)
+				return
+			}
+			ynet.Send(finishConn, ycomm.RequestInfo{Cmd: ycomm.BIGFILE_SLICE_SYNC_FINISH}.ParseToByte())
+		}
 	} else {
 		fmt.Println("对方拒绝了您的发送文件")
 	}
@@ -338,21 +491,21 @@ func syncFile(fileList []ycomm.CFileInfo) {
 	wg.Add(goroutineNum)
 	for i := 0; i < goroutineNum; i++ {
 		go func() {
-			ylog.Logf("启动任务>>>>", i)
+			logf("启动任务>>>>", i)
 			defer wg.Done()
 
 			var conn net.Conn
 			if flags.RouteIP != "" {
 				socket, err01 := ynet.Socket(flags.RouteIP, ycomm.RoutePort)
 				if err01 != nil {
-					ylog.Logf("创建到yroute连接失败>>>>>", err01)
+					logf("创建到yroute连接失败>>>>>", err01)
 					//这时需要发送一个请求到yroute，以减少一个连接
 				}
 
 				var dMap = make(map[string]string)
 				dMap[ycomm.REMOTE_NAME] = flags.RemoteName
 				mStr := ycomm.ParseMapToStr(dMap)
-				ylog.Logf("ysend发起文件流请求>>>>>", mStr)
+				logf("ysend发起文件流请求>>>>>", mStr)
 
 				ynet.SendRequest(socket, ycomm.RequestInfo{
 					Cmd:  ycomm.YSEND_MUL_FILE_SYNC2,
@@ -371,10 +524,10 @@ func syncFile(fileList []ycomm.CFileInfo) {
 				conn = conn1
 			}
 
-			ylog.Logf(">>>准备发起数据>>>>f")
+			logf(">>>准备发起数据>>>>f")
 			//发送传输请求
 			ycomm.WriteMsg(conn, "f")
-			ylog.Logf(">>>已发起数据>>>>f")
+			logf(">>>已发起数据>>>>f")
 
 			for {
 				tLen := len(taskNum)
@@ -386,16 +539,16 @@ func syncFile(fileList []ycomm.CFileInfo) {
 
 				//获取传输任务
 				task, _ := <-taskNum
-				ylog.Logf("开始传输任务>>>>", task)
+				logf("开始传输任务>>>>", task)
 
 				//发送开始传输请求【s】标志
 				ycomm.WriteMsg(conn, "s")
 
-				ylog.Logf("已发送数据标志>>>>s")
+				logf("已发送数据标志>>>>s")
 
 				//发送文件信息 fileInfo
 				ycomm.WriteMsg(conn, ycomm.ParseCFileInfoToJsonStr(task))
-				ylog.Logf("已发送文件数据>>>>", ycomm.ParseCFileInfoToJsonStr(task))
+				logf("已发送文件数据>>>>", ycomm.ParseCFileInfoToJsonStr(task))
 
 				//读取服务响应 检查信息
 				response := ycomm.ParseStrToResponseInfo(ycomm.ReadMsg(conn))
@@ -459,10 +612,10 @@ func syncFile(fileList []ycomm.CFileInfo) {
 
 				//任务完成+1
 				atomic.AddInt32(&finishFileNum, 1)
-				ylog.Logf("传输文件", task.Name, "完毕>>>>>>>")
+				logf("传输文件", task.Name, "完毕>>>>>>>")
 				//接收服务响应完成
 				response = ycomm.ParseStrToResponseInfo(ycomm.ReadMsg(conn))
-				ylog.Logf("收到接收到响应>>>>>", ycomm.ParseResponseToJsonStr(response))
+				logf("收到接收到响应>>>>>", ycomm.ParseResponseToJsonStr(response))
 				//fmt.Println("接收到Server传输文件" + task.Path + "完成响应：" + rcvMsg)
 				//fmt.Println()
 
@@ -543,7 +696,7 @@ func doSingleFileSend(sendName, filePath, targetIp string) {
 	//提取文件信息
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
-		ylog.Logf("文件打开失败>>>>[", err, "]")
+		logf("文件打开失败>>>>[", err, "]")
 		return
 	}
 
@@ -553,7 +706,7 @@ func doSingleFileSend(sendName, filePath, targetIp string) {
 	yrouteConn, err0 := ynet.GetRemoteConnection(targetIp, ycomm.RoutePort)
 	defer yrouteConn.Close()
 	if err0 != nil {
-		ylog.Logf("建立到远程route连接失败>>>>[", err0, "]")
+		logf("建立到远程route连接失败>>>>[", err0, "]")
 		return
 	}
 
@@ -563,21 +716,21 @@ func doSingleFileSend(sendName, filePath, targetIp string) {
 	sendMap[ycomm.SEND_TO_NAME] = sendName
 	sendMap[ycomm.FILE_SIZE] = strconv.FormatInt(sendFileSize, 10)
 	sendMsg := ycomm.ParseMapToStr(sendMap)
-	ylog.Logf("发送文件信息数据>>>>[", sendMsg, "]")
+	logf("发送文件信息数据>>>>[", sendMsg, "]")
 	ynet.SendRequest(yrouteConn, ycomm.RequestInfo{Cmd: ycomm.YSEND_TO_YROUTE_TO_YRECV_SINGLE_FILE, Data: sendMsg, Other: "no"})
 
 	//等待yroute响应
 	resMsg := ycomm.ReadMsg(yrouteConn)
-	ylog.Logf("收到yroute的响应数据>>>>", resMsg)
+	logf("收到yroute的响应数据>>>>", resMsg)
 	resp := ycomm.ParseStrToResponseInfo(resMsg)
 
 	if resp.Ok {
-		ylog.Logf(">>>>准备同步文件数据流")
+		logf(">>>>准备同步文件数据流")
 
 		wg.Add(1)
-		sendFile(yrouteConn, filePath)
+		sendSmallFile(yrouteConn, filePath)
 
-		ylog.Logf(">>>>同步文件数据流结束")
+		logf(">>>>同步文件数据流结束")
 
 	} else {
 		fmt.Println("异常: ", resp.Message)
@@ -589,7 +742,7 @@ func doMultiFileSend(sendPath string) {
 
 	routConn, err0 := ynet.Socket(flags.RouteIP, ycomm.RoutePort)
 	if err0 != nil {
-		ylog.Logf("与Route建立连接失败>>>>>", err0)
+		logf("与Route建立连接失败>>>>>", err0)
 		return
 	}
 
@@ -600,30 +753,30 @@ func doMultiFileSend(sendPath string) {
 	ynet.SendRequest(routConn, ycomm.RequestInfo{Cmd: ycomm.YSEND_DIR_DATA_SYNC, Data: mStr, Other: "no"})
 	defer routConn.Close()
 	rcvMsg := ycomm.ReadMsg(routConn)
-	ylog.Logf("收到来自yroute的目录通信信息>>>", rcvMsg)
+	logf("收到来自yroute的目录通信信息>>>", rcvMsg)
 	reps := ycomm.ParseStrToResponseInfo(rcvMsg)
 
 	if reps.Ok == false {
-		ylog.Logf("同步目录数据错误>>>>>", reps.Message)
+		logf("同步目录数据错误>>>>>", reps.Message)
 		fmt.Println("同步目录数据错误>>>>>", reps.Message)
 
 		return
 	}
 
-	ylog.Logf("收到route>>>>", reps.Message)
+	logf("收到route>>>>", reps.Message)
 
-	ylog.Logf("读取目录/文件数据>>>>")
+	logf("读取目录/文件数据>>>>")
 	dirList, fList := getDirAndFileInfo(sendPath)
-	ylog.Logf("读取目录/文件数据>>>>完毕>>>开始发送目录数据")
+	logf("读取目录/文件数据>>>>完毕>>>开始发送目录数据")
 	doSyncDir(routConn, dirList)
 	routConn.Close() //关掉
-	ylog.Logf("完毕>>>发送目录数据>>>ok")
+	logf("完毕>>>发送目录数据>>>ok")
 
-	ylog.Logf(">>>准备发送文件列表数据")
+	logf(">>>准备发送文件列表数据")
 
 	routConn2, err2 := ynet.Socket(flags.RouteIP, ycomm.RoutePort)
 	if err2 != nil {
-		ylog.Logf("与Route建立连接失败>>>>>", err0)
+		logf("与Route建立连接失败>>>>>", err0)
 		return
 	}
 
@@ -632,20 +785,20 @@ func doMultiFileSend(sendPath string) {
 		Data: mStr,
 	})
 
-	ylog.Logf(">>>准备发送文件列表数据完毕>>>等待接收yroute响应")
+	logf(">>>准备发送文件列表数据完毕>>>等待接收yroute响应")
 	rcvMsg2 := ycomm.ReadMsg(routConn2)
-	ylog.Logf("接收到yroute响应>>>>>", rcvMsg2)
+	logf("接收到yroute响应>>>>>", rcvMsg2)
 	resp := ycomm.ParseStrToResponseInfo(rcvMsg2)
 	routConn2.Close()
 
-	ylog.Logf("接收到yroute响应消息>>>>>", resp.Message)
+	logf("接收到yroute响应消息>>>>>", resp.Message)
 	if resp.Ok {
-		ylog.Logf("准备同步文件流>>>>>")
+		logf("准备同步文件流>>>>>")
 		syncFile(fList)
 		<-syncFileFlag
-		ylog.Logf("准备同步文件流>>>>>结束")
+		logf("准备同步文件流>>>>>结束")
 	} else {
-		ylog.Logf("同步文件流失败>>>>>")
+		logf("同步文件流失败>>>>>")
 	}
 
 }
@@ -661,19 +814,23 @@ func main() {
 	flag.BoolVar(&ycomm.Debug, "debug", false, "debug mode")
 	flag.Parse()
 
-	ylog.Logf("输入参数==>", flags)
+	flags.RemoteIP = "127.0.0.1"
+	ycomm.Debug = true
+	flags.SingleFilePath = "G:\\2023_Data\\resume\\online-杨铭森-v202309.pdf"
+
+	logf("输入参数==>", flags)
 
 	//直连与自动直连方式选择
 	if flags.RouteIP != "" { //自动直连方式
-		ylog.Logf("自动直连选择=======>")
+		logf("自动直连选择=======>")
 		if flags.RemoteName == "" {
 			fmt.Println("必须指定 -dn 目标名称")
 		}
 
 		if flags.SingleFilePath != "" {
-			ylog.Logf("发送单文件开始=======>")
+			logf("发送单文件开始=======>")
 			doSingleFileSend(flags.RemoteName, flags.SingleFilePath, flags.RouteIP)
-			ylog.Logf("发送单文件=======>结束")
+			logf("发送单文件=======>结束")
 		} else if flags.MultiFilePath != "" { //多文件
 			regList := ynet.GetRemoteRegInfo(flags.RouteIP)
 			var exsit = false
@@ -685,21 +842,21 @@ func main() {
 			}
 
 			if exsit == false {
-				ylog.Logf("不存在目标名称>>>", flags.RemoteName, ">>>>请检查")
+				logf("不存在目标名称>>>", flags.RemoteName, ">>>>请检查")
 				return
 			}
 
 			goroutineNum = ycomm.GOBAL_TASK_NUM
-			ylog.Logf("发送多文件>>>>>开始")
+			logf("发送多文件>>>>>开始")
 			doMultiFileSend(flags.MultiFilePath)
-			ylog.Logf("发送多文件>>>>>结束")
+			logf("发送多文件>>>>>结束")
 
 		} else {
 			fmt.Println("必须指定传输文件名或文件夹")
 		}
 
 	} else if flags.RemoteIP != "" { //直连方式
-		ylog.Logf("直连选择=======>")
+		logf("直连选择=======>")
 		//发送单文件还是多文件
 		if flags.MultiFilePath != "" {
 			//如果是多文件
@@ -707,7 +864,7 @@ func main() {
 			remoteIp = flags.RemoteIP
 			goroutineNum = flags.goNumber
 
-			ylog.Logf("目标ip==>", remoteIp, "===>发送文件===>", sendPath, "===>goNumber===>", goroutineNum)
+			logf("目标ip==>", remoteIp, "===>发送文件===>", sendPath, "===>goNumber===>", goroutineNum)
 
 			//do send
 			doSendMutliFile(sendPath)
@@ -716,10 +873,10 @@ func main() {
 			filePath := flags.SingleFilePath
 			targetIp := flags.RemoteIP + ":" + singleRemotePort
 
-			ylog.Logf("目标ip==>", targetIp, "===>发送文件", filePath)
+			logf("目标ip==>", targetIp, "===>发送文件", filePath)
 
 			//do parse
-			parseSingleFileInfo(filePath, targetIp)
+			prepareSendSingleFile(filePath, targetIp)
 
 		} else {
 			getUsage()

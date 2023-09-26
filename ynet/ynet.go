@@ -23,12 +23,18 @@ func GetBindNet(ip string, port string) (bindIp net.Listener) {
 	}
 }
 
+const TCP = "tcp"
+
 func ServerSocket(port string) (conn net.Listener, err error) {
-	return net.Listen("tcp", ycomm.LOCAL_HOST+":"+port)
+	return net.Listen(TCP, ycomm.LOCAL_HOST+":"+port)
 }
 
 func Socket(ip, port string) (conn net.Conn, err error) {
-	return net.Dial("tcp", ip+":"+port)
+	return net.Dial(TCP, ip+":"+port)
+}
+
+func Socket1(ipPort string) (conn net.Conn, err error) {
+	return net.Dial(TCP, ipPort)
 }
 
 func GetBindTcpListenNet(ip, port string) net.Listener {
@@ -52,6 +58,67 @@ func SendResponse(conn net.Conn, res ycomm.ResponseInfo) {
 //发送请求
 func SendRequest(conn net.Conn, req ycomm.RequestInfo) {
 	ycomm.WriteMsg(conn, req.ParseToJsonStr())
+}
+
+func SendStr(conn net.Conn, str string) {
+	Send(conn, []byte(str))
+}
+
+const NilCloseFlag = byte(0)
+
+func Send(conn net.Conn, bytes []byte) error {
+	sendBytes := append(bytes, NilCloseFlag)
+	_, err := conn.Write(sendBytes)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func Recv(conn net.Conn) (rcvBytes []byte, err error) {
+	tmpByte := make([]byte, 1)
+	for {
+		_, err := conn.Read(tmpByte)
+		if err != nil {
+			fmt.Println("错误(ERROR): recv读取数据出错[", err, "]")
+			err = errors.New("异常：" + err.Error())
+			return nil, err
+		}
+		if tmpByte[0] == NilCloseFlag {
+			break
+		}
+		rcvBytes = append(rcvBytes, tmpByte[0])
+	}
+
+	return rcvBytes, nil
+}
+
+func RecvN(conn net.Conn, n int) (rcvBytes []byte, err error) {
+	var buf []byte
+	if n >= 1024 {
+		buf = make([]byte, 1024)
+	} else {
+		buf = make([]byte, n)
+	}
+	rcvBytes = make([]byte, n)
+	cnt := 0
+	for {
+		rn, err := conn.Read(buf)
+		if err != nil {
+			fmt.Println("错误(ERROR): recvN读取数据出错[", err, "]")
+			err = errors.New("recvN异常：" + err.Error())
+			return nil, err
+		}
+		for i := 0; i < rn; i++ {
+			rcvBytes[cnt] = buf[i]
+			cnt++
+		}
+		if cnt >= n {
+			break
+		}
+	}
+
+	return rcvBytes, nil
 }
 
 //网络流转发

@@ -1,9 +1,12 @@
 package ycomm
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -54,6 +57,10 @@ const (
 	MB                   = 3
 	GB                   = 4
 	GOBAL_TASK_NUM       = 3
+	Size1B               = 1
+	Size1KB              = Size1B * 1024
+	Size1MB              = Size1KB * 1024
+	Size1GB              = Size1MB * 1024
 )
 
 const TO_TYPTE = "to_type"
@@ -196,6 +203,11 @@ type ResponseInfo struct {
 
 	//用于自定义通信规则时使用 其他不用是 传 OK
 	Status string `json:"status"`
+}
+
+func ParseResponseToBytes(res ResponseInfo) []byte {
+	bytes, _ := json.Marshal(res)
+	return bytes
 }
 
 func ParseResponseToJsonStr(res ResponseInfo) string {
@@ -375,4 +387,117 @@ func ParseMapToStr(dMap map[string]string) string {
 func GetHostName() string {
 	hostname, _ := os.Hostname()
 	return hostname
+}
+
+type FileSliceInfo struct {
+	Id     int    `json:"id"`
+	Name   string `json:"name"`
+	Start  int64  `json:"start"`
+	Length int64  `json:"length"`
+	Hash   string `json:"hash"`
+}
+
+func (fsi *FileSliceInfo) FileSliceInfoShow() {
+	fmt.Println("id: ", fsi.Id, " Name: ", fsi.Name, " Start: ", fsi.Start, " Length: ", fsi.Length, " Hash: ", fsi.Hash)
+}
+
+func (fsi *FileSliceInfo) ParseFileSliceToJsonStr() string {
+	bytes, _ := json.Marshal(fsi)
+	jStr := string(bytes)
+	return jStr
+}
+
+func ParseByteToFileSlice(bytes []byte) FileSliceInfo {
+	fsi := FileSliceInfo{}
+	json.Unmarshal(bytes, &fsi)
+	return fsi
+}
+
+func ParseStrToFileSlice(jsonStr string) FileSliceInfo {
+	var bytes = []byte(jsonStr)
+	fsi := FileSliceInfo{}
+	json.Unmarshal(bytes, &fsi)
+	return fsi
+}
+
+//分片文件传输指令
+const (
+	FILE_INFO_TIP             = "file_info_tip"
+	SMALL_FILE                = "small_file"                //小文件传输指令
+	BIGFILE_INIT              = "bigfile_init"              //大文件分片初始命令
+	BIGFILE_SLICE_SYNC        = "bigfile_slice_sync"        //同步命令
+	BIGFILE_SLICE_SYNC_FINISH = "bigfile_slice_sync_finish" //同步命令完成
+)
+
+const SPLIT_FLAG = "___"
+const TmpSlice = "tmpSlice"
+
+func IsSmallSend(sendFileSize int64) bool {
+	if sendFileSize <= 1*SizeGB {
+		return true
+	}
+	return false
+}
+
+//
+func Md5Hash(input []byte) string {
+	c := md5.New()
+	c.Write(input)
+	bytes := c.Sum(nil)
+	return hex.EncodeToString(bytes)
+}
+
+//get Os Sparator
+func GetOsSparator() string {
+	const separator = os.PathSeparator
+	if separator == '\\' {
+		return "\\"
+	} else {
+		return "/"
+	}
+}
+
+//tmp\shadow\test2.go => test2.go
+func GetFileName(fName string) string {
+	split := strings.Split(fName, GetOsSparator())
+	return split[len(split)-1]
+}
+
+func FileReadByOffset(file *os.File, startOffset int64, length int64) ([]byte, error) {
+	// 创建一个字节切片来存储读取到的数据
+	data := make([]byte, length)
+
+	// 移动到起始位置
+	_, err := file.Seek(startOffset, io.SeekStart)
+	if err != nil {
+		fmt.Println("移动文件指针失败:", err)
+		return nil, err
+	}
+
+	// 读取数据
+	_, err = file.Read(data)
+	if err != nil && err != io.EOF {
+		fmt.Println("读取数据失败:", err)
+		return nil, err
+	}
+
+	return data, nil
+}
+
+func FileReadByOffset1(file *os.File, data []byte, startOffset int64) error {
+	// 移动到起始位置
+	_, err := file.Seek(startOffset, io.SeekStart)
+	if err != nil {
+		fmt.Println("移动文件指针失败:", err)
+		return err
+	}
+
+	// 读取数据
+	_, err = file.Read(data)
+	if err != nil && err != io.EOF {
+		fmt.Println("读取数据失败:", err)
+		return err
+	}
+
+	return nil
 }
