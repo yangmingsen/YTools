@@ -814,9 +814,9 @@ func main() {
 	flag.BoolVar(&ycomm.Debug, "debug", false, "debug mode")
 	flag.Parse()
 
-	flags.RemoteIP = "127.0.0.1"
-	ycomm.Debug = true
-	flags.SingleFilePath = "G:\\2023_Data\\resume\\online-杨铭森-v202309.pdf"
+	//flags.RemoteIP = "127.0.0.1"
+	//ycomm.Debug = true
+	//flags.SingleFilePath = "G:\\2023_Data\\resume\\online-杨铭森-v202309.pdf"
 
 	logf("输入参数==>", flags)
 
